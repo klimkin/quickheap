@@ -179,25 +179,29 @@ pub unsafe trait SimdElem<T>: 'static {
 
 /// Classify the element t against the decreasing list of pivots.
 ///
-/// # Safety
-/// `pivots` is initialized with a capacity of 128, so reading out-of-bounds is fine.
+/// Returns `pivots.partition_point(|&p| t < p)`. Every SIMD load stays inside `pivots`:
+/// a partial tail reuses the last full vector and shifts out lanes already counted.
 #[inline(always)]
-pub unsafe fn push_position<T: Copy + Ord, S: SimdElem<T>>(pivots: &[T], t: T) -> usize {
-    if pivots.len() <= 64 {
-        let t_simd = S::splat(t);
-
-        let mut target_layer = 0;
-        let mut i = 0;
-        while i < pivots.len() {
-            // The caller must provide initialized padding for this full SIMD load.
-            let vals = unsafe { (pivots.as_ptr().add(i) as *const S::Simd).read_unaligned() };
-            target_layer += S::simd_lt_bitmask(t_simd, vals).trailing_ones() as usize;
-            i += S::L;
-        }
-        target_layer.min(pivots.len())
-    } else {
-        pivots.partition_point(|&p| t < p)
+pub fn push_position<T: Copy + Ord, S: SimdElem<T>>(pivots: &[T], t: T) -> usize {
+    if pivots.len() < S::L || pivots.len() > 64 {
+        return pivots.partition_point(|&p| t < p);
     }
+    let t_simd = S::splat(t);
+    let chunks = pivots.chunks_exact(S::L);
+    let tail = chunks.remainder().len();
+    let mut target_layer = 0;
+    for chunk in chunks {
+        // SAFETY: `chunks_exact` yields exactly `L` initialized elements.
+        let vals = unsafe { S::simd_from_slice(chunk) };
+        target_layer += S::simd_lt_bitmask(t_simd, vals).trailing_ones() as usize;
+    }
+    if tail > 0 {
+        // SAFETY: `L <= pivots.len()`, so the last `L` elements are initialized.
+        let vals = unsafe { S::simd_from_slice(&pivots[pivots.len() - S::L..]) };
+        let tail_mask = S::simd_lt_bitmask(t_simd, vals) >> (S::L - tail);
+        target_layer += (tail_mask & ((1 << tail) - 1)).trailing_ones() as usize;
+    }
+    target_layer
 }
 
 #[inline(never)]
