@@ -10,6 +10,42 @@ fn sources(path: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
+fn profile_setting(profile: &str, key: &str, default: &str) -> String {
+    let variable = format!(
+        "CARGO_PROFILE_{}_{}",
+        profile.to_uppercase(),
+        key.replace('-', "_").to_uppercase()
+    );
+    println!("cargo:rerun-if-env-changed={variable}");
+    if let Ok(value) = std::env::var(&variable) {
+        return value;
+    }
+    let result = std::process::Command::new(std::env::var("CARGO").unwrap())
+        .args([
+            "-Z",
+            "unstable-options",
+            "config",
+            "get",
+            &format!("profile.{profile}.{key}"),
+        ])
+        .output()
+        .unwrap();
+    if result.status.success() {
+        let text = String::from_utf8(result.stdout).unwrap();
+        return text
+            .split_once('=')
+            .unwrap()
+            .1
+            .trim()
+            .trim_matches('"')
+            .to_owned();
+    }
+    if String::from_utf8_lossy(&result.stderr).contains("is not set") {
+        return default.to_owned();
+    }
+    "unresolved".to_owned()
+}
+
 fn main() {
     let mut files = vec![
         PathBuf::from("Cargo.toml"),
@@ -49,8 +85,16 @@ fn main() {
     };
     let target = std::env::var("TARGET").unwrap();
     let opt = std::env::var("OPT_LEVEL").unwrap();
+    let profile = std::env::var("PROFILE").unwrap();
+    let cargo_profile = if profile == "debug" { "dev" } else { "release" };
+    let lto = profile_setting(cargo_profile, "lto", "false");
+    let codegen = profile_setting(
+        cargo_profile,
+        "codegen-units",
+        if profile == "debug" { "256" } else { "16" },
+    );
     println!(
-        "cargo:rustc-env=PAIRED_BUILD={};target={target};opt={opt};features={features};flags={flags};source=fnv1a64:{digest:016x}",
+        "cargo:rustc-env=PAIRED_BUILD={};target={target};opt={opt};lto={lto};codegen-units={codegen};features={features};flags={flags};source=fnv1a64:{digest:016x}",
         version.trim()
     );
 }

@@ -353,7 +353,29 @@ fn measure<T: Key, Q: Queue<T>, C: Clock>(
     elapsed
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Profile {
+    ControlledOperations,
+}
+impl Profile {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "controlled-operations" => Ok(Self::ControlledOperations),
+            "original-rust" => Err(
+                "original-rust requires quickheap-dev/bench/profiles.py; paired runner times controlled operations".into(),
+            ),
+            _ => Err(format!("unknown profile {value}")),
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Self::ControlledOperations => "controlled-operations",
+        }
+    }
+}
+
 struct Options {
+    profile: Profile,
     fixture: PathBuf,
     heap: String,
     repeats: usize,
@@ -365,6 +387,7 @@ struct Options {
     samples: Vec<u64>,
 }
 fn options() -> Result<Options, String> {
+    let mut profile = Profile::ControlledOperations;
     let mut fixture = None;
     let mut heap = "binary_heap".to_owned();
     let mut repeats = 3;
@@ -377,6 +400,7 @@ fn options() -> Result<Options, String> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--profile" => profile = Profile::parse(&args.next().ok_or("missing profile name")?)?,
             "--fixture" => {
                 fixture = Some(PathBuf::from(args.next().ok_or("missing fixture path")?))
             }
@@ -433,6 +457,7 @@ fn options() -> Result<Options, String> {
         return Err("scripted samples require --scalar-trace".into());
     }
     Ok(Options {
+        profile,
         fixture: fixture.ok_or("--fixture is required")?,
         heap,
         repeats,
@@ -469,7 +494,7 @@ fn run<T: Key, Q: Queue<T>>(
     let setup_inputs: InputView<T> = (&fixture.setup).into();
     let loop_fn = workload_loop::<T, Q>(fixture.workload);
     println!(
-        "elem,heap,n,workload,ops,repeat,nanos,protocol,build,backend,fixture_digest,reservation,timer,repeats,warmup,push_comparisons,pop_comparisons"
+        "elem,heap,n,workload,ops,repeat,nanos,protocol,build,backend,fixture_digest,reservation,timer,repeats,warmup,push_comparisons,pop_comparisons,profile,input_policy,cutoff"
     );
     for repeat in 0..options.warmup + options.repeats {
         let mut q = Q::default();
@@ -481,7 +506,7 @@ fn run<T: Key, Q: Queue<T>>(
         };
         if repeat >= options.warmup {
             println!(
-                "{},{heap},{},{},{},{},{nanos},{},{},{backend},{},backend-default,workload-only-raii,{},{},{},{}",
+                "{},{heap},{},{},{},{},{nanos},{},{},{backend},{},backend-default,workload-only-raii,{},{},{},{},{},shared-fixture,disabled",
                 T::ELEMENT.name(),
                 fixture.n,
                 fixture.workload.name(),
@@ -497,7 +522,8 @@ fn run<T: Key, Q: Queue<T>>(
                     .unwrap_or_default(),
                 comparisons
                     .map(|counts| counts.1.to_string())
-                    .unwrap_or_default()
+                    .unwrap_or_default(),
+                options.profile.name()
             );
         }
     }
@@ -688,6 +714,15 @@ fn main_result() -> Result<(), String> {
     }
 }
 fn main() {
+    if std::env::args()
+        .skip(1)
+        .any(|arg| arg == "--help" || arg == "-h")
+    {
+        println!(
+            "Usage: quickheap-paired [--profile controlled-operations] --fixture FILE [--heap NAME] [--repeat N] [--warmup N] [--verify-only] [--trace] [--scalar-trace] [--samples CSV] [--comparisons]\nOriginal Rust timing requires quickheap-dev/bench/profiles.py --profile original-rust."
+        );
+        return;
+    }
     if let Err(error) = main_result() {
         eprintln!("{error}");
         std::process::exit(2);
@@ -698,6 +733,20 @@ fn main() {
 mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    #[test]
+    fn profile_selection_preserves_runner_boundary() {
+        assert_eq!(
+            Profile::parse("controlled-operations").unwrap(),
+            Profile::ControlledOperations
+        );
+        assert!(
+            Profile::parse("original-rust")
+                .unwrap_err()
+                .contains("profiles.py")
+        );
+        assert!(Profile::parse("unknown").is_err());
+    }
 
     #[derive(Default)]
     struct Controlled {
