@@ -87,5 +87,31 @@
     "quickheap/src/test.rs": "825fd393e97fcf5905ad571101fb07f310531e4494d79e2b22350a24555a8750",
     "rust-toolchain.toml": "2ce1c1fe5e79a52424c9d88d99f5a2c95dcf5b4f4a82431bb9e5710cfb39e184",
     "rustfmt.toml": "81488ae3bcd5756dc21762a103ca15beb799fde4c27672cd7c8e7118f2eef130"
+  },
+  "submodules": {
+    "quickheap-dev/ext/radix-heap-sys/third_party/radix-heap": {
+      "feature": "ffi",
+      "revision": "f54eba0a19782c67a9779c28263a7ce680995eda"
+    },
+    "quickheap-dev/ext/s3q-sys/third_party/ips4o": {
+      "feature": "ffi",
+      "revision": "49c6fb294b829e171d85a4ffe7c279904fc41d4c"
+    },
+    "quickheap-dev/ext/s3q-sys/third_party/range-v3": {
+      "feature": "ffi",
+      "revision": "a81477931a8aa2ad025c6bda0609f38e09e4d7ec"
+    },
+    "quickheap-dev/ext/s3q-sys/third_party/s3q": {
+      "feature": "ffi",
+      "revision": "3621d1e79408164d942e9169a1ef4c5f6d695c52"
+    },
+    "quickheap-dev/ext/s3q-sys/third_party/xoshiro": {
+      "feature": "ffi",
+      "revision": "078bf3396c31c3fa6d6f6c785b4612fb547f7132"
+    },
+    "quickheap-dev/ext/sequence-heap-sys/third_party/SequenceHeap": {
+      "feature": "ffi",
+      "revision": "ddbf7507b9ddb74a80cbca368575b8a052a90bc3"
+    }
   }
 }

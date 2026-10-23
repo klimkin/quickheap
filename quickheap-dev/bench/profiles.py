@@ -108,7 +108,15 @@ def command(args):
     return cmd + ["--"] + run
 
 
-def original_sources():
+def original_features(args):
+    features = set() if args.no_default_features else {"avx2", "ffi"}
+    features.update((args.features or "").replace(",", " ").split())
+    if "avx512" in features:
+        features.add("avx2")
+    return features
+
+
+def original_sources(features=()):
     manifest = json.loads((BENCH / "original-sources.json").read_text())
     digest = 0xCBF29CE484222325
     for name, expected in sorted(manifest["files"].items()):
@@ -121,6 +129,35 @@ def original_sources():
             raise ValueError(f"original source drift from {manifest['revision']}: {name}")
         for byte in name.encode() + data:
             digest = ((digest ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    for name, dependency in sorted(manifest.get("submodules", {}).items()):
+        if dependency["feature"] not in features:
+            continue
+        path = ROOT / name
+        if not (path / ".git").exists():
+            raise ValueError(f"original FFI dependency uninitialized: {name}; "
+                             "run git submodule update --init --recursive")
+        head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=path, text=True).strip()
+        if head != dependency["revision"]:
+            raise ValueError(f"original FFI revision drift: {name}; expected {dependency['revision']}")
+        tree = subprocess.check_output(["git", "ls-tree", "-r", "-z", "HEAD"], cwd=path)
+        for entry in tree.split(b"\0"):
+            if not entry:
+                continue
+            metadata, filename = entry.split(b"\t", 1)
+            mode, kind, expected = metadata.split()
+            if kind != b"blob":
+                raise ValueError(f"original FFI nested dependency unsupported: {name}")
+            file = path / os.fsdecode(filename)
+            data = os.fsencode(os.readlink(file)) if mode == b"120000" else file.read_bytes()
+            blob = b"blob " + str(len(data)).encode() + b"\0" + data
+            if hashlib.sha1(blob).hexdigest().encode() != expected:
+                raise ValueError(f"original FFI source drift: {name}/{os.fsdecode(filename)}")
+            for byte in name.encode() + b"/" + filename + data:
+                digest = ((digest ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+        status = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"],
+                                         cwd=path, text=True)
+        if status:
+            raise ValueError(f"original FFI worktree drift: {name}")
     for name in ("quickheap-dev/bench/src/fixture.rs", "quickheap-dev/bench/profiles.py",
                  "quickheap-dev/bench/original-sources.json"):
         for byte in name.encode() + (ROOT / name).read_bytes():
@@ -129,20 +166,18 @@ def original_sources():
 
 
 def original_build(args, source):
-    version = subprocess.check_output(["rustc", "--version"], cwd=ROOT, text=True).strip()
-    verbose = subprocess.check_output(["rustc", "-vV"], cwd=ROOT, text=True)
+    rustc = os.environ.get("RUSTC") or cargo_config("build.rustc", "rustc")
+    version = subprocess.check_output([rustc, "--version"], cwd=ROOT, text=True).strip()
+    verbose = subprocess.check_output([rustc, "-vV"], cwd=ROOT, text=True)
     host = next(line.removeprefix("host: ") for line in verbose.splitlines()
                 if line.startswith("host: "))
-    features = set() if args.no_default_features else {"avx2", "ffi"}
-    features.update((args.features or "").replace(",", " ").split())
-    if "avx512" in features:
-        features.add("avx2")
-    flags = os.environ.get("CARGO_ENCODED_RUSTFLAGS", "").replace("\x1f", " ")
-    if "CARGO_ENCODED_RUSTFLAGS" not in os.environ:
-        flags = os.environ.get("RUSTFLAGS", cargo_config("build.rustflags", []))
-        if isinstance(flags, list):
-            flags = " ".join(flags)
+    features = original_features(args)
     target = os.environ.get("CARGO_BUILD_TARGET", cargo_config("build.target", host))
+    if isinstance(target, list):
+        if len(target) != 1:
+            raise ValueError("original build attribution requires one Cargo target")
+        target = target[0]
+    flags = original_rustflags(target)
     configured = cargo_config("profile.release", {})
     settings = [("opt", os.environ.get("CARGO_PROFILE_RELEASE_OPT_LEVEL",
                                        str(configured.get("opt-level", 3)))),
@@ -154,6 +189,22 @@ def original_build(args, source):
                      *(f"{key}={value}" for key, value in settings),
                      f"features={','.join(sorted(features)) or 'none'}", f"flags={flags}",
                      f"source={source}", "reference=a9f2518d9ed452130361cfe1681c68625a68ab35"])
+
+
+def original_rustflags(target):
+    if "CARGO_ENCODED_RUSTFLAGS" in os.environ:
+        return os.environ["CARGO_ENCODED_RUSTFLAGS"].replace("\x1f", " ")
+    if "RUSTFLAGS" in os.environ:
+        return os.environ["RUSTFLAGS"]
+    configured = cargo_config("target", {})
+    if any(key.startswith("cfg(") and value.get("rustflags")
+           for key, value in configured.items()):
+        raise ValueError("cannot attribute conditional target rustflags; use RUSTFLAGS "
+                         "or CARGO_ENCODED_RUSTFLAGS")
+    flags = cargo_config(f"target.{target}.rustflags", None)
+    if flags is None:
+        flags = cargo_config("build.rustflags", [])
+    return " ".join(flags) if isinstance(flags, list) else flags
 
 
 def cargo_config(key, default):
@@ -213,7 +264,8 @@ def main(argv=None):
     args = cli.parse_args(argv)
     try:
         cmd = command(args)
-        source = original_sources() if args.profile == Profile.ORIGINAL.value else None
+        features = original_features(args) if args.profile == Profile.ORIGINAL.value else set()
+        source = original_sources(features) if args.profile == Profile.ORIGINAL.value else None
         if args.output and args.raw_output and args.output.resolve() == args.raw_output.resolve():
             raise ValueError("output and raw-output must use different paths")
         if args.dry_run:
@@ -230,7 +282,7 @@ def main(argv=None):
                 raw.seek(0)
             if result.returncode:
                 return result.returncode
-            if source and original_sources() != source:
+            if source and original_sources(features) != source:
                 raise ValueError("original source changed during benchmark; attributed output refused")
             if args.output:
                 with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="",

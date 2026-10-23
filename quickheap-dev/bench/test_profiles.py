@@ -2,7 +2,9 @@ import contextlib
 import csv
 import importlib.util
 import io
+import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -88,12 +90,96 @@ class ProfilesTest(unittest.TestCase):
         values = {"build.rustflags": ["-C", "force-frame-pointers=yes", "-C", "target-cpu=native"],
                   "build.target": "test-target", "profile.release": {"lto": "thin"}}
         with patch.object(profiles.subprocess, "check_output", side_effect=["rustc test", "host: host-target\n"]):
-            with patch.object(profiles, "cargo_config", side_effect=lambda key, default: values[key]):
+            with patch.object(profiles, "cargo_config", side_effect=lambda key, default: values.get(key, default)):
                 with patch.dict(profiles.os.environ, {}, clear=True):
                     build = profiles.original_build(self.parse("--profile", "original-rust"), "source")
         self.assertIn("target=test-target", build)
         self.assertIn("flags=-C force-frame-pointers=yes -C target-cpu=native", build)
         self.assertIn("lto=thin;codegen-units=1", build)
+
+    def test_original_flags_follow_cargo_precedence(self):
+        values = {"build.rustflags": ["-C", "target-cpu=native"],
+                  "target.host-target.rustflags": ["-C", "target-cpu=x86-64"]}
+        cases = [({}, "-C target-cpu=x86-64"),
+                 ({"RUSTFLAGS": "-C target-cpu=skylake"},
+                  "-C target-cpu=skylake"),
+                 ({"RUSTFLAGS": "ignored", "CARGO_ENCODED_RUSTFLAGS": "-C\x1ftarget-cpu=znver3"},
+                  "-C target-cpu=znver3")]
+        for environment, expected in cases:
+            with self.subTest(environment=environment), patch.dict(profiles.os.environ, environment, clear=True):
+                with patch.object(profiles, "cargo_config", side_effect=lambda key, default: values.get(key, default)):
+                    self.assertEqual(profiles.original_rustflags("host-target"), expected)
+
+    def test_original_target_flags_change_build_identity(self):
+        values = {"build.rustflags": ["-C", "target-cpu=native"]}
+        identities = []
+        for cpu in ("x86-64", "native"):
+            values["target.host-target.rustflags"] = ["-C", f"target-cpu={cpu}"]
+            with patch.dict(profiles.os.environ,
+                            {"CARGO_TARGET_HOST_TARGET_RUSTFLAGS": f"-C target-cpu={cpu}"}, clear=True):
+                with patch.object(profiles, "cargo_config", side_effect=lambda key, default: values.get(key, default)):
+                    with patch.object(profiles.subprocess, "check_output", side_effect=["rustc test", "host: host-target\n"]):
+                        identities.append(profiles.original_build(self.parse("--profile", "original-rust"), "source"))
+        self.assertNotEqual(*identities)
+        self.assertIn("flags=-C target-cpu=x86-64", identities[0])
+
+    def test_original_target_flags_merge_config_and_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / "config.toml").write_text('[target.x86_64-unknown-linux-gnu]\n'
+                                            'rustflags = ["-C", "force-frame-pointers=yes"]\n')
+            with patch.dict(profiles.os.environ,
+                            {"CARGO_HOME": directory,
+                             "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS": "-C target-cpu=x86-64"},
+                            clear=True):
+                flags = profiles.original_rustflags("x86_64-unknown-linux-gnu")
+            self.assertEqual(flags, "-C force-frame-pointers=yes -C target-cpu=x86-64")
+
+    def test_original_conditional_target_flags_fail_without_explicit_override(self):
+        values = {"target": {'cfg(target_arch = "x86_64")': {"rustflags": ["-C", "target-cpu=native"]}}}
+        with patch.dict(profiles.os.environ, {}, clear=True):
+            with patch.object(profiles, "cargo_config", side_effect=lambda key, default: values.get(key, default)):
+                with self.assertRaisesRegex(ValueError, "conditional target rustflags"):
+                    profiles.original_rustflags("host-target")
+
+    def test_original_ffi_requires_initialized_dependency(self):
+        manifest = {"revision": "pinned", "files": {},
+                    "submodules": {"missing-submodule": {"feature": "ffi", "revision": "pinned"}}}
+        with patch.object(profiles.json, "loads", return_value=manifest):
+            with self.assertRaisesRegex(ValueError, "FFI dependency uninitialized"):
+                profiles.original_sources({"ffi"})
+            self.assertRegex(profiles.original_sources(), r"^fnv1a64:")
+
+    def test_original_ffi_verifies_revision_and_actual_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bench = root / "quickheap-dev/bench"
+            (bench / "src").mkdir(parents=True)
+            (bench / "src/fixture.rs").write_text("")
+            (bench / "profiles.py").write_text("")
+            dependency = root / "dependency"
+            dependency.mkdir()
+            subprocess.run(["git", "init", "-q", str(dependency)], check=True)
+            header = dependency / "queue.hpp"
+            header.write_text("original\n")
+            subprocess.run(["git", "add", "queue.hpp"], cwd=dependency, check=True)
+            subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                            "commit", "-qm", "test fixture"], cwd=dependency, check=True)
+            revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=dependency, text=True).strip()
+            manifest = {"revision": "pinned", "files": {},
+                        "submodules": {"dependency": {"feature": "ffi", "revision": revision}}}
+            manifest_path = bench / "original-sources.json"
+            manifest_path.write_text(json.dumps(manifest))
+            with patch.object(profiles, "ROOT", root), patch.object(profiles, "BENCH", bench):
+                self.assertRegex(profiles.original_sources({"ffi"}), r"^fnv1a64:")
+                header.write_text("changed\n")
+                with self.assertRaisesRegex(ValueError, "FFI source drift.*queue.hpp"):
+                    profiles.original_sources({"ffi"})
+                header.write_text("original\n")
+                manifest["submodules"]["dependency"]["revision"] = "0" * 40
+                manifest_path.write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(ValueError, "FFI revision drift"):
+                    profiles.original_sources({"ffi"})
 
     def test_child_failure_preserves_existing_output(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -111,7 +197,7 @@ class ProfilesTest(unittest.TestCase):
     def test_dry_run_never_launches_cargo(self):
         with patch.object(profiles.subprocess, "run") as run:
             with contextlib.redirect_stdout(io.StringIO()):
-                code = profiles.main(["--profile", "original-rust", "--dry-run"])
+                code = profiles.main(["--profile", "original-rust", "--no-default-features", "--dry-run"])
         self.assertEqual(code, 0)
         run.assert_not_called()
 

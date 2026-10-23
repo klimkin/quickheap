@@ -43,6 +43,10 @@ options fail in this profile. Original active registrations remain authoritative
 `original-sources.json` records SHA-256 hashes from reference revision
 `a9f2518d9ed452130361cfe1681c68625a68ab35`. Launcher verifies compiled Rust sources,
 FFI wrappers, manifests, locks, and build configuration before Cargo runs.
+Enabled `ffi` also requires all six third-party submodules at manifest revisions.
+Launcher checks their tracked file contents and rejects worktree changes.
+Uninitialized dependencies fail before Cargo runs and identify the missing path.
+`--no-default-features` skips dependencies that selected features do not compile.
 Existing `pub mod fixture;` export in benchmark library root is the only allowed
 source extension. Provenance hashes actual bytes, including fixture module,
 launcher, and source manifest. Cargo lock stays frozen; launcher checks sources
@@ -70,7 +74,11 @@ Cutoffs remain disabled. Standard binary heap grows naturally.
 
 `--features quickheap-avx2` enables production AVX2 queue. Independent paired
 workspace does not inherit original fat LTO and single codegen unit settings.
-Build provenance records effective paired configuration.
+Build provenance records compiler version, Cargo target, optimization level,
+enabled features, and `CARGO_ENCODED_RUSTFLAGS` supplied to the build script.
+Paired metadata omits LTO and codegen unit settings because Cargo does not expose
+their effective values to build scripts. Archive the Cargo command and verbose
+build log when overriding those settings, including overrides through `--config`.
 
 Direct paired CLI accepts `--profile controlled-operations`. Default retains
 that profile for existing callers. `--profile original-rust` fails and directs
@@ -89,6 +97,13 @@ Original fixture digest stays empty and input policy is `fresh-random-original`.
 Controlled input policy is `shared-fixture` and cutoff is `disabled`.
 Original attribution preserves metrics and full Rust heap type names;
 workload names drop Rust module prefixes.
+
+Original attribution resolves `RUSTC` or `build.rustc` and records release profile
+settings from merged Cargo configuration and environment overrides.
+Rust flags follow Cargo precedence. Encoded flags override `RUSTFLAGS`, followed
+by target-specific flags, then `build.rustflags`. Target environment flags include
+`CARGO_TARGET_<TRIPLE>_RUSTFLAGS`. Conditional `cfg(...)` rustflags fail attribution
+unless `RUSTFLAGS` or encoded flags provide an explicit override.
 
 `--dry-run` validates profile options and source pin, then prints Cargo command
 without executing it. `--help` lists launcher options.
