@@ -185,6 +185,37 @@ class ProfilesTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "FFI revision drift"):
                     profiles.original_sources({"ffi"})
 
+    def test_original_ffi_accepts_pinned_nested_dependency(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bench = root / "quickheap-dev/bench"
+            (bench / "src").mkdir(parents=True)
+            (bench / "src/fixture.rs").write_text("")
+            (bench / "profiles.py").write_text("")
+            git = ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                   "-c", "advice.addEmbeddedRepo=false"]
+            dependency = root / "dependency"
+            nested = dependency / "doc/pages"
+            nested.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q", str(nested)], check=True)
+            (nested / "index.html").write_text("docs\n")
+            subprocess.run(git + ["add", "index.html"], cwd=nested, check=True)
+            subprocess.run(git + ["commit", "-qm", "docs"], cwd=nested, check=True)
+            subprocess.run(["git", "init", "-q", str(dependency)], check=True)
+            (dependency / "queue.hpp").write_text("original\n")
+            subprocess.run(git + ["add", "queue.hpp", "doc/pages"], cwd=dependency, check=True)
+            subprocess.run(git + ["commit", "-qm", "test fixture"], cwd=dependency, check=True)
+            revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=dependency, text=True).strip()
+            manifest = {"revision": "pinned", "files": {},
+                        "submodules": {"dependency": {"feature": "ffi", "revision": revision}}}
+            (bench / "original-sources.json").write_text(json.dumps(manifest))
+            (bench / "original-repairs.json").write_text(json.dumps(NO_REPAIRS))
+            with patch.object(profiles, "ROOT", root), patch.object(profiles, "BENCH", bench):
+                self.assertRegex(profiles.original_sources({"ffi"}).digest, r"^fnv1a64:")
+                (nested / "index.html").write_text("changed\n")
+                with self.assertRaisesRegex(ValueError, "FFI worktree drift: dependency"):
+                    profiles.original_sources({"ffi"})
+
     def test_original_repair_is_attributed_only_when_complete(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
