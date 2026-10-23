@@ -1,0 +1,13 @@
+[package]
+name = "quickheap-paired"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[features]
+default = []
+quickheap-avx2 = ["dep:quickheap"]
+
+[dependencies]
+quickheap = { path = "../../../quickheap", optional = true, default-features = false }

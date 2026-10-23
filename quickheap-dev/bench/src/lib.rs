@@ -2,6 +2,7 @@
 
 use workloads::{CountComparisons, CountingHeapT, Elem};
 pub mod workloads;
+pub mod fixture;
 
 pub mod impls;
 
