@@ -49,14 +49,33 @@ Uninitialized dependencies fail before Cargo runs and identify the missing path.
 `--no-default-features` skips dependencies that selected features do not compile.
 Existing `pub mod fixture;` export in benchmark library root is the only allowed
 source extension. Provenance hashes actual bytes, including fixture module,
-launcher, and source manifest. Cargo lock stays frozen; launcher checks sources
+launcher, source manifest, and repair manifest. Cargo lock stays frozen; launcher checks sources
 again before attributing successful results.
 
-Current pinned development crate fails to compile on installed nightly. Unsafe
-`simd::push_position` call at `quickheap-dev/src/lib.rs:331` produces E0133 even
-with `--no-default-features`. Launcher returns Cargo failure, preserves any
-existing attributed output, and writes no replacement result. No safety patch or
-fallback runner changes original reference behavior.
+Unchanged reference fails to compile. Unsafe `simd::push_position` call at
+`quickheap-dev/src/lib.rs:331` produces E0133 even with `--no-default-features`.
+Launcher returns that Cargo failure, preserves any existing attributed output,
+and writes no replacement result.
+
+### Repaired revisions
+
+`original-repairs.json` declares repairs on top of the reference. Each repair
+names an identifier, fix commit, reason, and repaired SHA-256 for every file it
+changes. `original-sources.json` stays untouched. Launcher accepts a pinned file
+when it matches its reference hash or a declared repaired hash. A repair counts
+only when all of its files carry repaired content; partial repairs fail before
+Cargo runs. Any other content still fails as source drift.
+
+| Repair | Commit | Files | Change |
+|---|---|---|---|
+| `push-position-bounded-loads` | `64a83c6` | `quickheap/src/lib.rs`, `quickheap/src/simd.rs` | SIMD pivot search loads only live pivots; routing equals `partition_point(\|&p\| t < p)` |
+
+Workloads, registrations, reservations, repeats, cutoffs, and timer boundaries
+stay at the reference. Each row's `source_revision` records the reference SHA
+plus each applied repair as `+<id>@<commit>`. Unchanged sources record the bare
+reference SHA. Results carrying a repair measure the repaired revision, not the
+reference itself; reference Rust timing remains unavailable because the
+reference does not build.
 
 ## Controlled operation options
 
@@ -92,7 +111,8 @@ instead of buffering result set in memory. `--output` replaces result file only
 after successful attribution; omitted output sends result to stdout.
 
 Timing rows retain `protocol`, `build`, `backend`, `fixture_digest`, `reservation`,
-`timer`, `repeats`, `warmup`, `profile`, `input_policy`, and `cutoff`.
+`timer`, `repeats`, `warmup`, `profile`, `input_policy`, and `cutoff`. Original
+rows add `source_revision`.
 Original fixture digest stays empty and input policy is `fresh-random-original`.
 Controlled input policy is `shared-fixture` and cutoff is `disabled`.
 Original attribution preserves metrics and full Rust heap type names;

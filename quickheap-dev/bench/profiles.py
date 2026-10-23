@@ -12,11 +12,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from typing import NamedTuple
 
 
 ROOT = Path(__file__).resolve().parents[2]
 BENCH = ROOT / "quickheap-dev/bench"
 ORIGINAL_PROTOCOL = "quickheap-original-rust-a9f2518-v1"
+
+
+class Source(NamedTuple):
+    digest: str
+    revision: str
 
 
 class Profile(str, Enum):
@@ -116,8 +122,22 @@ def original_features(args):
     return features
 
 
+def manifests():
+    return (json.loads((BENCH / "original-sources.json").read_text()),
+            json.loads((BENCH / "original-repairs.json").read_text()))
+
+
 def original_sources(features=()):
-    manifest = json.loads((BENCH / "original-sources.json").read_text())
+    manifest, repairs = manifests()
+    if repairs["reference"] != manifest["revision"]:
+        raise ValueError("original repairs target another reference revision")
+    repaired = {}
+    for repair in repairs["repairs"]:
+        for name, expected in repair["files"].items():
+            if name not in manifest["files"]:
+                raise ValueError(f"original repair {repair['id']} names unpinned file: {name}")
+            repaired[(name, expected)] = repair["id"]
+    applied = {}
     digest = 0xCBF29CE484222325
     for name, expected in sorted(manifest["files"].items()):
         path = ROOT / name
@@ -125,8 +145,12 @@ def original_sources(features=()):
         checked = data
         if name == "quickheap-dev/bench/src/lib.rs":
             checked = checked.replace(b"pub mod fixture;\n", b"", 1)
-        if hashlib.sha256(checked).hexdigest() != expected:
-            raise ValueError(f"original source drift from {manifest['revision']}: {name}")
+        actual = hashlib.sha256(checked).hexdigest()
+        if actual != expected:
+            repair = repaired.get((name, actual))
+            if repair is None:
+                raise ValueError(f"original source drift from {manifest['revision']}: {name}")
+            applied.setdefault(repair, set()).add(name)
         for byte in name.encode() + data:
             digest = ((digest ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
     for name, dependency in sorted(manifest.get("submodules", {}).items()):
@@ -159,10 +183,20 @@ def original_sources(features=()):
         if status:
             raise ValueError(f"original FFI worktree drift: {name}")
     for name in ("quickheap-dev/bench/src/fixture.rs", "quickheap-dev/bench/profiles.py",
-                 "quickheap-dev/bench/original-sources.json"):
+                 "quickheap-dev/bench/original-sources.json",
+                 "quickheap-dev/bench/original-repairs.json"):
         for byte in name.encode() + (ROOT / name).read_bytes():
             digest = ((digest ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
-    return f"fnv1a64:{digest:016x}"
+    revision = [manifest["revision"]]
+    for repair in repairs["repairs"]:
+        if repair["id"] not in applied:
+            continue
+        unrepaired = sorted(set(repair["files"]) - applied[repair["id"]])
+        if unrepaired:
+            raise ValueError(f"partial original repair {repair['id']}: "
+                             f"{', '.join(unrepaired)} still at reference")
+        revision.append(f"{repair['id']}@{repair['commit']}")
+    return Source(f"fnv1a64:{digest:016x}", "+".join(revision))
 
 
 def original_build(args, source):
@@ -230,12 +264,12 @@ def backend(heap):
     return "scalar"
 
 
-def attribute_original(raw, output, args, build):
+def attribute_original(raw, output, args, build, revision):
     rows = csv.DictReader(raw)
     required = {"elem", "heap", "n", "workload", "ops", "repeat", "nanos"}
     if not rows.fieldnames or not required.issubset(rows.fieldnames):
         raise ValueError("original runner emitted no timing CSV header")
-    added = ["protocol", "build", "backend", "fixture_digest", "reservation", "timer",
+    added = ["protocol", "source_revision", "build", "backend", "fixture_digest", "reservation", "timer",
              "repeats", "warmup", "profile", "input_policy", "cutoff"]
     writer = csv.DictWriter(output, fieldnames=rows.fieldnames + added)
     writer.writeheader()
@@ -248,7 +282,7 @@ def attribute_original(raw, output, args, build):
             reservation = "reserve:1048576"
         elif "original_quickheap::OriginalQuickHeap" in heap:
             reservation = "reserve:268435456"
-        row.update(protocol=ORIGINAL_PROTOCOL, build=build, backend=backend(heap),
+        row.update(protocol=ORIGINAL_PROTOCOL, source_revision=revision, build=build, backend=backend(heap),
                    fixture_digest="", reservation=reservation,
                    timer="workload-input-queue-destruction", repeats="3", warmup="1",
                    profile=Profile.ORIGINAL.value, input_policy="fresh-random-original",
@@ -270,9 +304,10 @@ def main(argv=None):
             raise ValueError("output and raw-output must use different paths")
         if args.dry_run:
             print(json.dumps({"profile": args.profile, "cwd": str(ROOT), "command": cmd,
-                              "source": source}, indent=2))
+                              "source": source and source.digest,
+                              "source_revision": source and source.revision}, indent=2))
             return 0
-        build = original_build(args, source) if source else None
+        build = original_build(args, source.digest) if source else None
         with tempfile.TemporaryFile(mode="w+", encoding="utf-8", newline="") as raw:
             result = subprocess.run(cmd, cwd=ROOT, stdout=raw)
             raw.seek(0)
@@ -290,7 +325,7 @@ def main(argv=None):
                     temporary = Path(output.name)
                     try:
                         if build:
-                            attribute_original(raw, output, args, build)
+                            attribute_original(raw, output, args, build, source.revision)
                         else:
                             shutil.copyfileobj(raw, output)
                     except BaseException:
@@ -298,7 +333,7 @@ def main(argv=None):
                         raise
                 temporary.replace(args.output)
             elif build:
-                attribute_original(raw, sys.stdout, args, build)
+                attribute_original(raw, sys.stdout, args, build, source.revision)
             else:
                 shutil.copyfileobj(raw, sys.stdout)
         return 0

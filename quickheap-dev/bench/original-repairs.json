@@ -1,0 +1,14 @@
+{
+  "reference": "a9f2518d9ed452130361cfe1681c68625a68ab35",
+  "repairs": [
+    {
+      "id": "push-position-bounded-loads",
+      "commit": "64a83c655fc89e54263866c6c645e2f24bc9709a",
+      "reason": "Reference fails to compile (E0133 at quickheap-dev/src/lib.rs:331); quickheap::simd::push_position loaded SIMD lanes past pivots.len(). Repair bounds loads to live pivots; routing equals partition_point(|&p| t < p).",
+      "files": {
+        "quickheap/src/lib.rs": "3ba7ebff25103c87dc9f22a5730fcb6ddcfc9da6f27b5331c16654a7fe995c16",
+        "quickheap/src/simd.rs": "d0cbceaafbcc54621ab5552da5d1549d7992e3b22e696885cf2d2ac6a4b5d17e"
+      }
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 import contextlib
 import csv
+import hashlib
 import importlib.util
 import io
 import json
@@ -13,6 +14,7 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("profiles", Path(__file__).with_name("profiles.py"))
 profiles = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(profiles)
+NO_REPAIRS = {"reference": "pinned", "repairs": []}
 
 
 class ProfilesTest(unittest.TestCase):
@@ -24,7 +26,7 @@ class ProfilesTest(unittest.TestCase):
         self.assertEqual(profiles.command(args),
                          ["cargo", "run", "--release", "--locked", "--package", "bench",
                           "--example", "bench", "--"])
-        self.assertRegex(profiles.original_sources(), r"^fnv1a64:[0-9a-f]{16}$")
+        self.assertRegex(profiles.original_sources().digest, r"^fnv1a64:[0-9a-f]{16}$")
 
     def test_original_rejects_controlled_contract(self):
         for extra in (("--fixture", "sample.qh"), ("--repeat", "3"),
@@ -49,7 +51,7 @@ class ProfilesTest(unittest.TestCase):
 
     def test_original_source_drift_blocks_launch(self):
         manifest = {"revision": "pinned", "files": {"Cargo.toml": "0" * 64}}
-        with patch.object(profiles.json, "loads", return_value=manifest):
+        with patch.object(profiles, "manifests", return_value=(manifest, NO_REPAIRS)):
             with self.assertRaisesRegex(ValueError, "source drift.*Cargo.toml"):
                 profiles.original_sources()
 
@@ -62,7 +64,7 @@ class ProfilesTest(unittest.TestCase):
         output = io.StringIO()
         profiles.attribute_original(raw, output,
                                     self.parse("--profile", "original-rust", "--table"),
-                                    "compiler;source=fnv1a64:1234")
+                                    "compiler;source=fnv1a64:1234", "pinned+fix@commit")
         output.seek(0)
         rows = list(csv.DictReader(output))
         self.assertEqual(rows[0]["nanos"], "123")
@@ -70,6 +72,7 @@ class ProfilesTest(unittest.TestCase):
         self.assertEqual(rows[1]["reservation"], "reserve:268435456")
         for row in rows:
             self.assertEqual(row["fixture_digest"], "")
+            self.assertEqual(row["source_revision"], "pinned+fix@commit")
             self.assertEqual(row["input_policy"], "fresh-random-original")
             self.assertEqual(row["timer"], "workload-input-queue-destruction")
             self.assertEqual(row["cutoff"], "128")
@@ -84,7 +87,7 @@ class ProfilesTest(unittest.TestCase):
     def test_header_only_original_output_is_not_a_result(self):
         with self.assertRaisesRegex(ValueError, "no timing rows"):
             profiles.attribute_original(io.StringIO("elem,heap,n,workload,ops,repeat,nanos\n"),
-                                        io.StringIO(), self.parse("--profile", "original-rust"), "build")
+                                        io.StringIO(), self.parse("--profile", "original-rust"), "build", "pinned")
 
     def test_original_build_records_merged_cargo_configuration(self):
         values = {"build.rustflags": ["-C", "force-frame-pointers=yes", "-C", "target-cpu=native"],
@@ -145,10 +148,10 @@ class ProfilesTest(unittest.TestCase):
     def test_original_ffi_requires_initialized_dependency(self):
         manifest = {"revision": "pinned", "files": {},
                     "submodules": {"missing-submodule": {"feature": "ffi", "revision": "pinned"}}}
-        with patch.object(profiles.json, "loads", return_value=manifest):
+        with patch.object(profiles, "manifests", return_value=(manifest, NO_REPAIRS)):
             with self.assertRaisesRegex(ValueError, "FFI dependency uninitialized"):
                 profiles.original_sources({"ffi"})
-            self.assertRegex(profiles.original_sources(), r"^fnv1a64:")
+            self.assertRegex(profiles.original_sources().digest, r"^fnv1a64:")
 
     def test_original_ffi_verifies_revision_and_actual_content(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -170,8 +173,9 @@ class ProfilesTest(unittest.TestCase):
                         "submodules": {"dependency": {"feature": "ffi", "revision": revision}}}
             manifest_path = bench / "original-sources.json"
             manifest_path.write_text(json.dumps(manifest))
+            (bench / "original-repairs.json").write_text(json.dumps(NO_REPAIRS))
             with patch.object(profiles, "ROOT", root), patch.object(profiles, "BENCH", bench):
-                self.assertRegex(profiles.original_sources({"ffi"}), r"^fnv1a64:")
+                self.assertRegex(profiles.original_sources({"ffi"}).digest, r"^fnv1a64:")
                 header.write_text("changed\n")
                 with self.assertRaisesRegex(ValueError, "FFI source drift.*queue.hpp"):
                     profiles.original_sources({"ffi"})
@@ -180,6 +184,34 @@ class ProfilesTest(unittest.TestCase):
                 manifest_path.write_text(json.dumps(manifest))
                 with self.assertRaisesRegex(ValueError, "FFI revision drift"):
                     profiles.original_sources({"ffi"})
+
+    def test_original_repair_is_attributed_only_when_complete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bench = root / "quickheap-dev/bench"
+            (bench / "src").mkdir(parents=True)
+            (bench / "src/fixture.rs").write_text("")
+            (bench / "profiles.py").write_text("")
+            sha = lambda text: hashlib.sha256(text.encode()).hexdigest()
+            manifest = {"revision": "pinned", "files": {"a.rs": sha("a"), "b.rs": sha("b")}}
+            repairs = {"reference": "pinned", "repairs": [
+                {"id": "fix", "commit": "c0ffee", "files": {"a.rs": sha("a2"), "b.rs": sha("b2")}}]}
+            (bench / "original-sources.json").write_text(json.dumps(manifest))
+            (bench / "original-repairs.json").write_text(json.dumps(repairs))
+            def sources(a, b):
+                (root / "a.rs").write_text(a)
+                (root / "b.rs").write_text(b)
+                return profiles.original_sources()
+            with patch.object(profiles, "ROOT", root), patch.object(profiles, "BENCH", bench):
+                reference = sources("a", "b")
+                repaired = sources("a2", "b2")
+                self.assertEqual(reference.revision, "pinned")
+                self.assertEqual(repaired.revision, "pinned+fix@c0ffee")
+                self.assertNotEqual(reference.digest, repaired.digest)
+                with self.assertRaisesRegex(ValueError, "partial original repair fix: b.rs"):
+                    sources("a2", "b")
+                with self.assertRaisesRegex(ValueError, "source drift.*a.rs"):
+                    sources("a3", "b2")
 
     def test_child_failure_preserves_existing_output(self):
         with tempfile.TemporaryDirectory() as directory:
