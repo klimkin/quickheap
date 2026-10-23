@@ -169,8 +169,10 @@ def original_sources(features=()):
                 continue
             metadata, filename = entry.split(b"\t", 1)
             mode, kind, expected = metadata.split()
-            if kind != b"blob":
-                raise ValueError(f"original FFI nested dependency unsupported: {name}")
+            if kind == b"commit":
+                for byte in name.encode() + b"/" + filename + expected:
+                    digest = ((digest ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+                continue
             file = path / os.fsdecode(filename)
             data = os.fsencode(os.readlink(file)) if mode == b"120000" else file.read_bytes()
             blob = b"blob " + str(len(data)).encode() + b"\0" + data
