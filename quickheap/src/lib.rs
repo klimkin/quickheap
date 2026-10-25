@@ -175,7 +175,7 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> SimdQuickHeap<T, S> {
 
             // Sort final layer decreasing.
             let layer = &mut self.buckets[self.pivots.len()];
-            layer.sort_unstable_by_key(|&x| std::cmp::Reverse(x));
+            sort_terminal_descending::<T, S>(layer);
         }
 
         // Find and extract the minimum.
@@ -191,7 +191,7 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> SimdQuickHeap<T, S> {
             // Sort the new final layer decreasing if it's already small.
             if self.buckets[self.pivots.len()].len() <= Self::N {
                 let layer = &mut self.buckets[self.pivots.len()];
-                layer.sort_unstable_by_key(|&x| std::cmp::Reverse(x));
+                sort_terminal_descending::<T, S>(layer);
             }
         }
 
@@ -247,6 +247,46 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> SimdQuickHeap<T, S> {
             self.pivots.pop();
         }
     }
+}
+
+/// Sort a terminal layer of at most 16 elements in decreasing order without data-dependent branches.
+#[inline(never)]
+fn sort_terminal_descending<T: Copy + Ord, S: simd::SimdElem<T>>(layer: &mut [T]) {
+    const W: usize = 16;
+    let n = layer.len();
+    debug_assert!(n <= W);
+    if n <= 8 {
+        for i in 1..n {
+            let t = layer[i];
+            let mut pos = i;
+            while pos != 0 && layer[pos - 1] < t {
+                layer[pos] = layer[pos - 1];
+                pos -= 1;
+            }
+            layer[pos] = t;
+        }
+        return;
+    }
+    let mut v = [S::MAX; W];
+    v[W - n..].copy_from_slice(layer);
+    let mut width = 2;
+    while width <= W {
+        let mut distance = width / 2;
+        while distance != 0 {
+            for i in 0..W {
+                let j = i ^ distance;
+                if j > i {
+                    let (hi, lo) = (v[i].max(v[j]), v[i].min(v[j]));
+                    let up = i & width == 0;
+                    v[i] = if up { hi } else { lo };
+                    v[j] = if up { lo } else { hi };
+                }
+            }
+            distance /= 2;
+        }
+        width *= 2;
+    }
+    layer.copy_from_slice(&v[W - n..]);
 }
 
 /// The key-value pair SimdQuickHeap implementation
