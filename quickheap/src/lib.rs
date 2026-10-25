@@ -137,7 +137,11 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> SimdQuickHeap<T, S> {
 
     /// Push `t` onto the priority queue.
     pub fn push(&mut self, t: T) {
-        let target_layer = simd::push_position::<T, S>(&self.pivots, t);
+        let target_layer = if self.pivots.last().is_none_or(|&p| p > t) {
+            self.pivots.len()
+        } else {
+            simd::push_position::<T, S>(&self.pivots, t)
+        };
 
         let layer = &mut self.buckets[target_layer];
 
