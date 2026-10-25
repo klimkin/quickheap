@@ -99,6 +99,8 @@ pub struct SimdQuickHeap<T: Copy + Ord, S: simd::SimdElem<T> = Simd> {
     /// This can be longer than `layer` to reuse allocations.
     buckets: Vec<Vec<T>>,
     size: usize,
+    /// SplitMix64 state for pivot sampling.
+    rng: u64,
     _backend: PhantomData<S>,
 }
 
@@ -109,6 +111,7 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> Default for SimdQuickHeap<T,
             pivots: Vec::with_capacity(128),
             buckets: (0..128).map(|_| vec![]).collect(),
             size: 0,
+            rng: 0x243f6a8885a308d3,
             _backend: PhantomData,
         }
     }
@@ -212,7 +215,7 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> SimdQuickHeap<T, S> {
         let n = cur_layer.len();
 
         // Sample a pivot using the pivot strategy
-        let (pivot, pivot_pos) = MedianOfM::<3>::pick(cur_layer);
+        let (pivot, pivot_pos) = MedianOfM::<3>::pick(cur_layer, &mut self.rng);
 
         self.pivots.push(pivot);
 
@@ -261,6 +264,8 @@ pub struct KvSimdQuickHeap<T: Copy + Ord, S: simd::SimdElem<T> = Simd> {
     keys: Vec<Vec<T>>,
     values: Vec<Vec<T>>,
     size: usize,
+    /// SplitMix64 state for pivot sampling.
+    rng: u64,
     _backend: PhantomData<S>,
 }
 
@@ -279,6 +284,7 @@ impl<T: Copy + Ord + Debug + Default, S: simd::SimdElem<T>> KvSimdQuickHeap<T, S
             keys: (0..128).map(|_| vec![]).collect(),
             values: (0..128).map(|_| vec![]).collect(),
             size: 0,
+            rng: 0x243f6a8885a308d3,
             _backend: PhantomData,
         }
     }
@@ -399,7 +405,7 @@ impl<T: Copy + Ord + Debug + Default, S: simd::SimdElem<T>> KvSimdQuickHeap<T, S
         debug_assert!(cur_val_layer.len() == n);
 
         // Sample a pivot using the pivot strategy
-        let (pivot, pivot_pos) = MedianOfM::<3>::pick(cur_key_layer);
+        let (pivot, pivot_pos) = MedianOfM::<3>::pick(cur_key_layer, &mut self.rng);
 
         self.pivots.push(pivot);
 
