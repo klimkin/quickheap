@@ -255,6 +255,9 @@ fn sort_terminal_descending<T: Copy + Ord, S: simd::SimdElem<T>>(layer: &mut [T]
     const W: usize = 16;
     let n = layer.len();
     debug_assert!(n <= W);
+    if layer.is_sorted_by(|a, b| a >= b) {
+        return;
+    }
     if n <= 8 {
         for i in 1..n {
             let t = layer[i];
