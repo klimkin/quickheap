@@ -146,10 +146,13 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> SimdQuickHeap<T, S> {
         let layer = &mut self.buckets[target_layer];
 
         if target_layer == self.pivots.len() && layer.len() < Self::N {
-            // Count the number of larger elements in the prefix and insert the new element after them.
-            let pos = layer.partition_point(|x| *x > t);
-            layer.insert(pos, t);
-            // TODO: SIMD
+            layer.push(t);
+            let mut pos = layer.len() - 1;
+            while pos != 0 && layer[pos - 1] < t {
+                layer[pos] = layer[pos - 1];
+                pos -= 1;
+            }
+            layer[pos] = t;
         } else {
             layer.push(t);
         }
