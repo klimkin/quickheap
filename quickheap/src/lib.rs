@@ -358,17 +358,26 @@ impl<T: Copy + Ord + Debug + Default, S: simd::SimdElem<T>> KvSimdQuickHeap<T, S
 
     /// Push `t` onto the heap.
     pub fn push(&mut self, key: T, value: T) {
-        let target_layer = simd::push_position::<T, S>(&self.pivots, key);
+        let target_layer = if self.pivots.last().is_none_or(|&p| p > key) {
+            self.pivots.len()
+        } else {
+            simd::push_position::<T, S>(&self.pivots, key)
+        };
 
         let key_layer = &mut self.keys[target_layer];
         let value_layer = &mut self.values[target_layer];
 
         if target_layer == self.pivots.len() && key_layer.len() < Self::N {
-            // Count the number of larger elements in the prefix and insert the new element after them.
-            let pos = key_layer.partition_point(|x| *x > key); // TODO: Is this correct??
-            key_layer.insert(pos, key);
-            value_layer.insert(pos, value);
-            // TODO: SIMD
+            key_layer.push(key);
+            value_layer.push(value);
+            let mut pos = key_layer.len() - 1;
+            while pos != 0 && key_layer[pos - 1] < key {
+                key_layer[pos] = key_layer[pos - 1];
+                value_layer[pos] = value_layer[pos - 1];
+                pos -= 1;
+            }
+            key_layer[pos] = key;
+            value_layer[pos] = value;
         } else {
             key_layer.push(key);
             value_layer.push(value);
@@ -494,28 +503,20 @@ impl<T: Copy + Ord + Debug + Default, S: simd::SimdElem<T>> KvSimdQuickHeap<T, S
     }
 
     fn sort_key_and_values(keys: &mut [T], vals: &mut [T]) {
-        let n = keys.len();
-        let mut idx: Vec<usize> = (0..n).collect();
-        idx.sort_unstable_by_key(|&i| std::cmp::Reverse(keys[i]));
-
-        for i in 0..n {
-            if idx[i] == i {
-                continue;
+        debug_assert!(keys.len() <= Self::N);
+        if keys.is_sorted_by(|a, b| a >= b) {
+            return;
+        }
+        for i in 1..keys.len() {
+            let (k, v) = (keys[i], vals[i]);
+            let mut pos = i;
+            while pos != 0 && keys[pos - 1] < k {
+                keys[pos] = keys[pos - 1];
+                vals[pos] = vals[pos - 1];
+                pos -= 1;
             }
-            let (tk, tv) = (keys[i], vals[i]);
-            let mut cur = i;
-            loop {
-                let next = idx[cur];
-                idx[cur] = cur; // mark as done
-                if next == i {
-                    keys[cur] = tk;
-                    vals[cur] = tv;
-                    break;
-                }
-                keys[cur] = keys[next];
-                vals[cur] = vals[next];
-                cur = next;
-            }
+            keys[pos] = k;
+            vals[pos] = v;
         }
     }
 }
