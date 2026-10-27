@@ -99,8 +99,6 @@ pub struct SimdQuickHeap<T: Copy + Ord, S: simd::SimdElem<T> = Simd> {
     /// This can be longer than `layer` to reuse allocations.
     buckets: Vec<Vec<T>>,
     size: usize,
-    /// SplitMix64 state for pivot sampling.
-    rng: u64,
     _backend: PhantomData<S>,
 }
 
@@ -111,7 +109,6 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> Default for SimdQuickHeap<T,
             pivots: Vec::with_capacity(128),
             buckets: (0..128).map(|_| vec![]).collect(),
             size: 0,
-            rng: 0x243f6a8885a308d3,
             _backend: PhantomData,
         }
     }
@@ -137,22 +134,15 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> SimdQuickHeap<T, S> {
 
     /// Push `t` onto the priority queue.
     pub fn push(&mut self, t: T) {
-        let target_layer = if self.pivots.last().is_none_or(|&p| p > t) {
-            self.pivots.len()
-        } else {
-            simd::push_position::<T, S>(&self.pivots, t)
-        };
+        let target_layer = unsafe { simd::push_position::<T, S>(&self.pivots, t) };
 
         let layer = &mut self.buckets[target_layer];
 
         if target_layer == self.pivots.len() && layer.len() < Self::N {
-            layer.push(t);
-            let mut pos = layer.len() - 1;
-            while pos != 0 && layer[pos - 1] < t {
-                layer[pos] = layer[pos - 1];
-                pos -= 1;
-            }
-            layer[pos] = t;
+            // Count the number of larger elements in the prefix and insert the new element after them.
+            let pos = layer.partition_point(|x| *x > t);
+            layer.insert(pos, t);
+            // TODO: SIMD
         } else {
             layer.push(t);
         }
@@ -175,7 +165,7 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> SimdQuickHeap<T, S> {
 
             // Sort final layer decreasing.
             let layer = &mut self.buckets[self.pivots.len()];
-            sort_terminal_descending::<T, S>(layer);
+            layer.sort_unstable_by_key(|&x| std::cmp::Reverse(x));
         }
 
         // Find and extract the minimum.
@@ -191,7 +181,7 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> SimdQuickHeap<T, S> {
             // Sort the new final layer decreasing if it's already small.
             if self.buckets[self.pivots.len()].len() <= Self::N {
                 let layer = &mut self.buckets[self.pivots.len()];
-                sort_terminal_descending::<T, S>(layer);
+                layer.sort_unstable_by_key(|&x| std::cmp::Reverse(x));
             }
         }
 
@@ -222,7 +212,7 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> SimdQuickHeap<T, S> {
         let n = cur_layer.len();
 
         // Sample a pivot using the pivot strategy
-        let (pivot, pivot_pos) = MedianOfM::<3>::pick(cur_layer, &mut self.rng);
+        let (pivot, pivot_pos) = MedianOfM::<3>::pick(cur_layer);
 
         self.pivots.push(pivot);
 
@@ -249,49 +239,6 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> SimdQuickHeap<T, S> {
     }
 }
 
-/// Sort a terminal layer of at most 16 elements in decreasing order without data-dependent branches.
-#[inline(never)]
-fn sort_terminal_descending<T: Copy + Ord, S: simd::SimdElem<T>>(layer: &mut [T]) {
-    const W: usize = 16;
-    let n = layer.len();
-    debug_assert!(n <= W);
-    if layer.is_sorted_by(|a, b| a >= b) {
-        return;
-    }
-    if n <= 8 {
-        for i in 1..n {
-            let t = layer[i];
-            let mut pos = i;
-            while pos != 0 && layer[pos - 1] < t {
-                layer[pos] = layer[pos - 1];
-                pos -= 1;
-            }
-            layer[pos] = t;
-        }
-        return;
-    }
-    let mut v = [S::MAX; W];
-    v[W - n..].copy_from_slice(layer);
-    let mut width = 2;
-    while width <= W {
-        let mut distance = width / 2;
-        while distance != 0 {
-            for i in 0..W {
-                let j = i ^ distance;
-                if j > i {
-                    let (hi, lo) = (v[i].max(v[j]), v[i].min(v[j]));
-                    let up = i & width == 0;
-                    v[i] = if up { hi } else { lo };
-                    v[j] = if up { lo } else { hi };
-                }
-            }
-            distance /= 2;
-        }
-        width *= 2;
-    }
-    layer.copy_from_slice(&v[W - n..]);
-}
-
 /// The key-value pair SimdQuickHeap implementation
 ///
 /// - `T`: the element type.
@@ -314,8 +261,6 @@ pub struct KvSimdQuickHeap<T: Copy + Ord, S: simd::SimdElem<T> = Simd> {
     keys: Vec<Vec<T>>,
     values: Vec<Vec<T>>,
     size: usize,
-    /// SplitMix64 state for pivot sampling.
-    rng: u64,
     _backend: PhantomData<S>,
 }
 
@@ -334,7 +279,6 @@ impl<T: Copy + Ord + Debug + Default, S: simd::SimdElem<T>> KvSimdQuickHeap<T, S
             keys: (0..128).map(|_| vec![]).collect(),
             values: (0..128).map(|_| vec![]).collect(),
             size: 0,
-            rng: 0x243f6a8885a308d3,
             _backend: PhantomData,
         }
     }
@@ -358,26 +302,17 @@ impl<T: Copy + Ord + Debug + Default, S: simd::SimdElem<T>> KvSimdQuickHeap<T, S
 
     /// Push `t` onto the heap.
     pub fn push(&mut self, key: T, value: T) {
-        let target_layer = if self.pivots.last().is_none_or(|&p| p > key) {
-            self.pivots.len()
-        } else {
-            simd::push_position::<T, S>(&self.pivots, key)
-        };
+        let target_layer = unsafe { simd::push_position::<T, S>(&self.pivots, key) };
 
         let key_layer = &mut self.keys[target_layer];
         let value_layer = &mut self.values[target_layer];
 
         if target_layer == self.pivots.len() && key_layer.len() < Self::N {
-            key_layer.push(key);
-            value_layer.push(value);
-            let mut pos = key_layer.len() - 1;
-            while pos != 0 && key_layer[pos - 1] < key {
-                key_layer[pos] = key_layer[pos - 1];
-                value_layer[pos] = value_layer[pos - 1];
-                pos -= 1;
-            }
-            key_layer[pos] = key;
-            value_layer[pos] = value;
+            // Count the number of larger elements in the prefix and insert the new element after them.
+            let pos = key_layer.partition_point(|x| *x > key); // TODO: Is this correct??
+            key_layer.insert(pos, key);
+            value_layer.insert(pos, value);
+            // TODO: SIMD
         } else {
             key_layer.push(key);
             value_layer.push(value);
@@ -464,7 +399,7 @@ impl<T: Copy + Ord + Debug + Default, S: simd::SimdElem<T>> KvSimdQuickHeap<T, S
         debug_assert!(cur_val_layer.len() == n);
 
         // Sample a pivot using the pivot strategy
-        let (pivot, pivot_pos) = MedianOfM::<3>::pick(cur_key_layer, &mut self.rng);
+        let (pivot, pivot_pos) = MedianOfM::<3>::pick(cur_key_layer);
 
         self.pivots.push(pivot);
 
@@ -503,20 +438,28 @@ impl<T: Copy + Ord + Debug + Default, S: simd::SimdElem<T>> KvSimdQuickHeap<T, S
     }
 
     fn sort_key_and_values(keys: &mut [T], vals: &mut [T]) {
-        debug_assert!(keys.len() <= Self::N);
-        if keys.is_sorted_by(|a, b| a >= b) {
-            return;
-        }
-        for i in 1..keys.len() {
-            let (k, v) = (keys[i], vals[i]);
-            let mut pos = i;
-            while pos != 0 && keys[pos - 1] < k {
-                keys[pos] = keys[pos - 1];
-                vals[pos] = vals[pos - 1];
-                pos -= 1;
+        let n = keys.len();
+        let mut idx: Vec<usize> = (0..n).collect();
+        idx.sort_unstable_by_key(|&i| std::cmp::Reverse(keys[i]));
+
+        for i in 0..n {
+            if idx[i] == i {
+                continue;
             }
-            keys[pos] = k;
-            vals[pos] = v;
+            let (tk, tv) = (keys[i], vals[i]);
+            let mut cur = i;
+            loop {
+                let next = idx[cur];
+                idx[cur] = cur; // mark as done
+                if next == i {
+                    keys[cur] = tk;
+                    vals[cur] = tv;
+                    break;
+                }
+                keys[cur] = keys[next];
+                vals[cur] = vals[next];
+                cur = next;
+            }
         }
     }
 }
