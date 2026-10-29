@@ -156,6 +156,8 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
         let target_layer =
             if OPTS & OPT_TERMINAL_SHORTCUT != 0 && self.pivots.last().is_none_or(|&p| t < p) {
                 self.pivots.len()
+            } else if OPTS & OPT_SCAN_EARLY_EXIT != 0 {
+                simd::push_position_early_exit::<T, S>(&self.pivots, t)
             } else {
                 unsafe { simd::push_position::<T, S>(&self.pivots, t) }
             };

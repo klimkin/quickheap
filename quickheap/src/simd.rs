@@ -229,6 +229,34 @@ pub fn insert_pos<T: Copy + Ord, S: SimdElem<T>>(elems: &[T], e: T) -> usize {
     target_pos.min(elems.len())
 }
 
+/// `push_position` that stops the SIMD scan at the first chunk holding a pivot `<= t`.
+/// Pivots decrease, so every later chunk would start with such a pivot and add 0.
+#[inline(always)]
+pub fn push_position_early_exit<T: Copy + Ord, S: SimdElem<T>>(pivots: &[T], t: T) -> usize {
+    if pivots.len() <= 64 {
+        let t_simd = S::splat(t);
+
+        let mut target_layer = 0;
+        let mut i = 0;
+        while i < pivots.len() {
+            // The caller must provide initialized padding for this full SIMD load.
+            let c = unsafe {
+                let vals = (pivots.as_ptr().add(i) as *const S::Simd).read_unaligned();
+                S::simd_lt_bitmask(t_simd, vals).trailing_ones() as usize
+            };
+            target_layer += c;
+            if c < S::L {
+                break;
+            }
+
+            i += S::L;
+        }
+        target_layer.min(pivots.len())
+    } else {
+        pivots.partition_point(|&p| t < p)
+    }
+}
+
 #[inline(never)]
 pub fn position_min<T: Copy + Ord, S: SimdElem<T>>(v: &mut [T]) -> usize {
     let mut min_pos = [0; 2];
