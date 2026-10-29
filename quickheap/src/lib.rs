@@ -82,11 +82,24 @@ pub type Simd = simd::Neon;
 
 use crate::{partitioning::VecPartitioning, pivots::MedianOfM};
 
+/// `OPTS` bit: push below the smallest pivot straight into the terminal layer.
+pub const OPT_TERMINAL_SHORTCUT: u32 = 1;
+/// `OPTS` bit: refill the terminal layer in a separate, never-inlined function.
+pub const OPT_COLD_TERMINAL: u32 = 2;
+/// `OPTS` bit: one popcount per partitioned vector instead of two, on the AVX2 backend.
+pub const OPT_ONE_COUNT: u32 = 4;
+/// `OPTS` bit: stop the SIMD pivot scan at the first chunk with a pivot `<= t`.
+pub const OPT_SCAN_EARLY_EXIT: u32 = 8;
+/// `OPTS` bit: sort terminal layers by insertion up to 8 keys and with a bitonic network for 9..=16.
+pub const OPT_SORT_NETWORK: u32 = 16;
+
 /// The key-only SimdQuickHeap implementation
 ///
 /// - `T`: the element type: `u32`, `i32`, `u64`, or `i64`.
 /// - `S`: an optional tag to select the SIMD backend: [`Avx2`], [`Avx512`], or [`Neon`].
-pub struct SimdQuickHeap<T: Copy + Ord, S: simd::SimdElem<T> = Simd> {
+/// - `OPTS`: a bitwise OR of the `OPT_*` constants selecting experimental variants.
+///   The default 0 is the reference algorithm.
+pub struct SimdQuickHeap<T: Copy + Ord, S: simd::SimdElem<T> = Simd, const OPTS: u32 = 0> {
     /// A decreasing array of the pivots for all layers.
     /// buckets[i] >= pivots[i] >= buckets[i+1]
     /// Values equal to pivots[i] can be in layer i or i+1.
@@ -107,7 +120,9 @@ pub struct SimdQuickHeap<T: Copy + Ord, S: simd::SimdElem<T> = Simd> {
 }
 
 /// Return a default instance with plenty (128) layers of empty buckets.
-impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> Default for SimdQuickHeap<T, S> {
+impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> Default
+    for SimdQuickHeap<T, S, OPTS>
+{
     fn default() -> Self {
         Self {
             pivots: Vec::with_capacity(128),
@@ -118,7 +133,7 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> Default for SimdQuickHeap<T,
     }
 }
 
-impl<T: Copy + Ord + Default, S: simd::SimdElem<T>> SimdQuickHeap<T, S> {
+impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHeap<T, S, OPTS> {
     const N: usize = 16;
 
     /// Return the total capacity over all buckets.
