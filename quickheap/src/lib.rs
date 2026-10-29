@@ -153,7 +153,12 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
 
     /// Push `t` onto the priority queue.
     pub fn push(&mut self, t: T) {
-        let target_layer = unsafe { simd::push_position::<T, S>(&self.pivots, t) };
+        let target_layer =
+            if OPTS & OPT_TERMINAL_SHORTCUT != 0 && self.pivots.last().is_none_or(|&p| t < p) {
+                self.pivots.len()
+            } else {
+                unsafe { simd::push_position::<T, S>(&self.pivots, t) }
+            };
 
         let layer = &mut self.buckets[target_layer];
 
