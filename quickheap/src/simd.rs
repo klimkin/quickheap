@@ -99,9 +99,11 @@ pub unsafe trait SimdElem<T>: 'static {
      */
 
     /// Partition all `L` lanes of `vals` against `threshold`.
+    /// With `ONE_COUNT`, a backend may derive the `cur` count from the `next` count
+    /// instead of a second popcount.
     /// # Safety
     /// `cur_write` and `next_write` must have at least `L` elements of capacity beyond their current write index.
-    unsafe fn partition_fast<const MODE: usize>(
+    unsafe fn partition_fast<const MODE: usize, const ONE_COUNT: bool>(
         vals: Self::Simd,
         threshold: Self::Simd,
         pivot_pos: usize,
@@ -114,7 +116,7 @@ pub unsafe trait SimdElem<T>: 'static {
     /// Like `partition_fast`, but only the first `len` lanes are in range.
     /// # Safety
     /// Same capacity requirements as `partition_fast`.
-    unsafe fn partition_slow<const MODE: usize>(
+    unsafe fn partition_slow<const MODE: usize, const ONE_COUNT: bool>(
         vals: Self::Simd,
         len: Self::Simd,
         threshold: Self::Simd,
@@ -410,7 +412,7 @@ macro_rules! impl_simd_elem_32 {
             }
 
             #[inline(always)]
-            unsafe fn partition_fast<const MODE: usize>(
+            unsafe fn partition_fast<const MODE: usize, const ONE_COUNT: bool>(
                 vals: Self::Simd,
                 threshold: Self::Simd,
                 pivot_pos: usize,
@@ -434,7 +436,11 @@ macro_rules! impl_simd_elem_32 {
                         cur_write.add(*cur_write_cnt) as *mut __m256i,
                         _mm256_permutevar8x32_epi32(vals, key),
                     );
-                    *cur_write_cnt += large.count_ones() as usize;
+                    *cur_write_cnt += if ONE_COUNT {
+                        8 - small.count_ones() as usize
+                    } else {
+                        large.count_ones() as usize
+                    };
 
                     let key: __m256i = transmute(crate::simd::UNIQSHUF32[large as usize]);
                     _mm256_storeu_si256(
@@ -446,7 +452,7 @@ macro_rules! impl_simd_elem_32 {
             }
 
             #[inline(always)]
-            unsafe fn partition_slow<const MODE: usize>(
+            unsafe fn partition_slow<const MODE: usize, const ONE_COUNT: bool>(
                 vals: Self::Simd,
                 len: Self::Simd,
                 threshold: Self::Simd,
@@ -476,7 +482,11 @@ macro_rules! impl_simd_elem_32 {
                         cur_write.add(*cur_write_cnt) as *mut __m256i,
                         _mm256_permutevar8x32_epi32(vals, key),
                     );
-                    *cur_write_cnt += large.count_ones() as usize;
+                    *cur_write_cnt += if ONE_COUNT {
+                        len.to_array()[0] as usize - small.count_ones() as usize
+                    } else {
+                        large.count_ones() as usize
+                    };
 
                     let key: __m256i = transmute(crate::simd::UNIQSHUF32[(!small) as usize]);
                     _mm256_storeu_si256(
@@ -670,7 +680,7 @@ macro_rules! impl_simd_elem_64 {
             }
 
             #[inline(always)]
-            unsafe fn partition_fast<const MODE: usize>(
+            unsafe fn partition_fast<const MODE: usize, const ONE_COUNT: bool>(
                 vals: $simd,
                 threshold: $simd,
                 pivot_pos: usize,
@@ -695,7 +705,11 @@ macro_rules! impl_simd_elem_64 {
                         cur_write.add(*cur_write_cnt) as *mut __m256i,
                         _mm256_permutevar8x32_epi32(vals, key),
                     );
-                    *cur_write_cnt += large.count_ones() as usize;
+                    *cur_write_cnt += if ONE_COUNT {
+                        4 - small.count_ones() as usize
+                    } else {
+                        large.count_ones() as usize
+                    };
 
                     let key: __m256i = transmute(crate::simd::UNIQSHUF64[large as usize]);
                     _mm256_storeu_si256(
@@ -707,7 +721,7 @@ macro_rules! impl_simd_elem_64 {
             }
 
             #[inline(always)]
-            unsafe fn partition_slow<const MODE: usize>(
+            unsafe fn partition_slow<const MODE: usize, const ONE_COUNT: bool>(
                 vals: $simd,
                 len: $simd,
                 threshold: $simd,
@@ -737,7 +751,11 @@ macro_rules! impl_simd_elem_64 {
                         cur_write.add(*cur_write_cnt) as *mut __m256i,
                         _mm256_permutevar8x32_epi32(vals, key),
                     );
-                    *cur_write_cnt += large.count_ones() as usize;
+                    *cur_write_cnt += if ONE_COUNT {
+                        len.to_array()[0] as usize - small.count_ones() as usize
+                    } else {
+                        large.count_ones() as usize
+                    };
 
                     let key: __m256i = transmute(crate::simd::UNIQSHUF64[(small ^ 0xF) as usize]);
                     _mm256_storeu_si256(
@@ -931,7 +949,7 @@ macro_rules! impl_simd_elem_32_avx512 {
             }
 
             #[inline(always)]
-            unsafe fn partition_fast<const MODE: usize>(
+            unsafe fn partition_fast<const MODE: usize, const ONE_COUNT: bool>(
                 vals: Self::Simd,
                 threshold: Self::Simd,
                 pivot_pos: usize,
@@ -978,7 +996,7 @@ macro_rules! impl_simd_elem_32_avx512 {
             }
 
             #[inline(always)]
-            unsafe fn partition_slow<const MODE: usize>(
+            unsafe fn partition_slow<const MODE: usize, const ONE_COUNT: bool>(
                 vals: Self::Simd,
                 len: Self::Simd,
                 threshold: Self::Simd,
@@ -1264,7 +1282,7 @@ macro_rules! impl_simd_elem_64_avx512 {
             }
 
             #[inline(always)]
-            unsafe fn partition_fast<const MODE: usize>(
+            unsafe fn partition_fast<const MODE: usize, const ONE_COUNT: bool>(
                 vals: Self::Simd,
                 threshold: Self::Simd,
                 pivot_pos: usize,
@@ -1311,7 +1329,7 @@ macro_rules! impl_simd_elem_64_avx512 {
             }
 
             #[inline(always)]
-            unsafe fn partition_slow<const MODE: usize>(
+            unsafe fn partition_slow<const MODE: usize, const ONE_COUNT: bool>(
                 vals: Self::Simd,
                 len: Self::Simd,
                 threshold: Self::Simd,
@@ -1615,7 +1633,7 @@ macro_rules! impl_simd_elem_32_neon {
             } */
 
             #[inline(always)]
-            unsafe fn partition_fast<const MODE: usize>(
+            unsafe fn partition_fast<const MODE: usize, const ONE_COUNT: bool>(
                 vals: $simd,
                 threshold: $simd,
                 pivot_pos: usize,
@@ -1648,7 +1666,7 @@ macro_rules! impl_simd_elem_32_neon {
             }
 
             #[inline(always)]
-            unsafe fn partition_slow<const MODE: usize>(
+            unsafe fn partition_slow<const MODE: usize, const ONE_COUNT: bool>(
                 vals: $simd,
                 len: $simd,
                 threshold: $simd,
@@ -1885,7 +1903,7 @@ macro_rules! impl_simd_elem_64_neon {
             } */
 
             #[inline(always)]
-            unsafe fn partition_fast<const MODE: usize>(
+            unsafe fn partition_fast<const MODE: usize, const ONE_COUNT: bool>(
                 vals: $simd,
                 threshold: $simd,
                 pivot_pos: usize,
@@ -1918,7 +1936,7 @@ macro_rules! impl_simd_elem_64_neon {
             }
 
             #[inline(always)]
-            unsafe fn partition_slow<const MODE: usize>(
+            unsafe fn partition_slow<const MODE: usize, const ONE_COUNT: bool>(
                 vals: $simd,
                 len: $simd,
                 threshold: $simd,

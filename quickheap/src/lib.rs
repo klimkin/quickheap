@@ -264,7 +264,11 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
         // Clear the next layer
         next_layer.clear();
 
-        VecPartitioning::<T, S>::partition(cur_layer, next_layer, pivot, pivot_pos);
+        if OPTS & OPT_ONE_COUNT != 0 {
+            VecPartitioning::<T, S>::partition::<true>(cur_layer, next_layer, pivot, pivot_pos);
+        } else {
+            VecPartitioning::<T, S>::partition::<false>(cur_layer, next_layer, pivot, pivot_pos);
+        }
 
         debug_assert!(next_layer.len() + cur_layer.len() == n);
 

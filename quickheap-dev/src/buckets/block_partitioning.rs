@@ -89,7 +89,7 @@ impl<
 
         for i in (0..n2).step_by(S::L) {
             unsafe {
-                S::partition_fast::<MODE>(
+                S::partition_fast::<MODE, false>(
                     S::simd_from_slice(cur_layer.get_unchecked(i, S::L)),
                     threshold,
                     pivot_pos,
@@ -103,7 +103,7 @@ impl<
 
         if n2 < n {
             unsafe {
-                S::partition_slow::<MODE>(
+                S::partition_slow::<MODE, false>(
                     S::simd_from_slice(cur_layer.get_unchecked(n2, n - n2)),
                     S::splat(S::from_usize(n - n2)),
                     threshold,
@@ -255,7 +255,7 @@ impl<
             while i < K {
                 unsafe {
                     let v = S::simd_from_ptr(src.add(i));
-                    S::partition_fast::<MODE>(
+                    S::partition_fast::<MODE, false>(
                         v,
                         threshold,
                         pivot_pos,
@@ -281,7 +281,7 @@ impl<
             let n2r = n_rem.next_multiple_of(S::L).saturating_sub(S::L);
             for _ in (0..n2r).step_by(S::L) {
                 unsafe {
-                    S::partition_fast::<MODE>(
+                    S::partition_fast::<MODE, false>(
                         S::simd_from_slice(cur_layer.get_next_unchecked(S::L)),
                         threshold,
                         pivot_pos,
@@ -303,7 +303,7 @@ impl<
 
             if n2r < n_rem {
                 unsafe {
-                    S::partition_slow::<MODE>(
+                    S::partition_slow::<MODE, false>(
                         S::simd_from_slice(cur_layer.get_next_unchecked(n_rem - n2r)),
                         S::splat(S::from_usize(n - n2)),
                         threshold,

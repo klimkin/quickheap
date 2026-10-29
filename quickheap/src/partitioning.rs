@@ -24,7 +24,12 @@ impl<T: PartialEq + Copy, S: simd::SimdElem<T>> VecPartitioning<T, S> {
     #[inline]
     /// Partition `cur_layer` into the `cur_layer` and `next_layer`.
     /// Elements equal to `pivot` can go either way.
-    pub fn partition(cur_layer: &mut Vec<T>, next_layer: &mut Vec<T>, pivot: T, pivot_pos: usize) {
+    pub fn partition<const ONE_COUNT: bool>(
+        cur_layer: &mut Vec<T>,
+        next_layer: &mut Vec<T>,
+        pivot: T,
+        pivot_pos: usize,
+    ) {
         assert!(next_layer.is_empty(), "destination layer must be empty");
         let n = cur_layer.len();
 
@@ -49,7 +54,7 @@ impl<T: PartialEq + Copy, S: simd::SimdElem<T>> VecPartitioning<T, S> {
 
         for i in (0..n2).step_by(S::L) {
             unsafe {
-                S::partition_fast::<SPLIT_PIVOTS_CUR_AND_NEXT>(
+                S::partition_fast::<SPLIT_PIVOTS_CUR_AND_NEXT, ONE_COUNT>(
                     S::simd_from_ptr(cur_layer_ptr.add(i)),
                     threshold,
                     pivot_pos,
@@ -92,7 +97,7 @@ impl<T: PartialEq + Copy, S: simd::SimdElem<T>> VecPartitioning<T, S> {
 
         if n2 < n {
             unsafe {
-                S::partition_slow::<SPLIT_PIVOTS_CUR_AND_NEXT>(
+                S::partition_slow::<SPLIT_PIVOTS_CUR_AND_NEXT, ONE_COUNT>(
                     S::simd_from_ptr(cur_layer_ptr.add(n2)),
                     S::splat(S::from_usize(n - n2)),
                     threshold,
