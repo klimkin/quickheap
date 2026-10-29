@@ -201,7 +201,7 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
 
                 // Sort final layer decreasing.
                 let layer = &mut self.buckets[self.pivots.len()];
-                layer.sort_unstable_by_key(|&x| std::cmp::Reverse(x));
+                Self::sort_terminal(layer);
             }
         }
 
@@ -218,7 +218,7 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
             // Sort the new final layer decreasing if it's already small.
             if self.buckets[self.pivots.len()].len() <= Self::N {
                 let layer = &mut self.buckets[self.pivots.len()];
-                layer.sort_unstable_by_key(|&x| std::cmp::Reverse(x));
+                Self::sort_terminal(layer);
             }
         }
 
@@ -234,7 +234,16 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
         }
 
         let layer = &mut self.buckets[self.pivots.len()];
-        layer.sort_unstable_by_key(|&x| std::cmp::Reverse(x));
+        Self::sort_terminal(layer);
+    }
+
+    #[inline(always)]
+    fn sort_terminal(layer: &mut [T]) {
+        if OPTS & OPT_SORT_NETWORK != 0 {
+            sort_terminal_descending::<T, S>(layer);
+        } else {
+            layer.sort_unstable_by_key(|&x| std::cmp::Reverse(x));
+        }
     }
 
     #[inline(never)]
@@ -288,6 +297,45 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
             self.pivots.pop();
         }
     }
+}
+
+#[inline(never)]
+fn sort_terminal_descending<T: Copy + Ord, S: simd::SimdElem<T>>(layer: &mut [T]) {
+    const W: usize = 16;
+    let n = layer.len();
+    debug_assert!(n <= W);
+    if n <= 8 {
+        for i in 1..n {
+            let t = layer[i];
+            let mut pos = i;
+            while pos != 0 && layer[pos - 1] < t {
+                layer[pos] = layer[pos - 1];
+                pos -= 1;
+            }
+            layer[pos] = t;
+        }
+        return;
+    }
+    let mut v = [S::MAX; W];
+    v[W - n..].copy_from_slice(layer);
+    let mut width = 2;
+    while width <= W {
+        let mut distance = width / 2;
+        while distance != 0 {
+            for i in 0..W {
+                let j = i ^ distance;
+                if j > i {
+                    let (hi, lo) = (v[i].max(v[j]), v[i].min(v[j]));
+                    let up = i & width == 0;
+                    v[i] = if up { hi } else { lo };
+                    v[j] = if up { lo } else { hi };
+                }
+            }
+            distance /= 2;
+        }
+        width *= 2;
+    }
+    layer.copy_from_slice(&v[W - n..]);
 }
 
 /// The key-value pair SimdQuickHeap implementation
