@@ -193,7 +193,7 @@ fn comparisons_workload<T: Elem, H: Heap<T>, W: Workload>(n: u64) -> f64 {
 pub fn bench<T: Elem, H: Heap<T>>() {
     let minpow = if ARGS.comparisons { ARGS.max } else { ARGS.min };
     let maxpow = ARGS.max;
-    let stride = if ARGS.table { 5 } else { 1 };
+    let stride = if ARGS.table { 5 } else { ARGS.step as usize };
     let ns: Vec<_> = (minpow..=maxpow)
         .step_by(stride)
         .map(|i| (2u64).pow(i))
@@ -227,6 +227,12 @@ pub fn bench<T: Elem, H: Heap<T>>() {
 
         if ARGS.table {
             bench_one::<T, H, MonotoneConstantSize>(n, &mut ok[1]);
+        } else if ARGS.variants {
+            bench_one::<T, H, MonotoneConstantSize>(n, &mut ok[0]);
+            bench_one::<T, H, RandomConstantSize>(n, &mut ok[1]);
+            bench_one::<T, H, WorstCaseDescending>(n, &mut ok[2]);
+            bench_one::<T, H, MostlyPushDecreasing>(n, &mut ok[3]);
+            bench_one::<T, H, HeapSort>(n, &mut ok[4]);
         } else {
             bench_one::<T, H, HeapSort>(n, &mut ok[0]);
             bench_one::<T, H, MonotoneConstantSize>(n, &mut ok[1]);
@@ -247,6 +253,9 @@ struct Args {
     min: u32,
     #[clap(long, default_value = "25")]
     max: u32,
+    /// Exponent step between sizes, outside `--table`.
+    #[clap(long, default_value = "1")]
+    step: u32,
 
     #[clap(long)]
     r#i32: bool,
@@ -269,6 +278,38 @@ struct Args {
     /// Measure the memory (vector capacity) used by BinaryHeap and SimdQuickHeap.
     #[clap(long)]
     memory: bool,
+
+    /// SimdQuickHeap<_, Avx2, OPTS> for every OPTS in the variant registry.
+    #[clap(long)]
+    variants: bool,
+}
+
+#[cfg(feature = "avx2")]
+fn bench_variants<T: Elem + Default>()
+where
+    Avx2: SimdElem<T>,
+{
+    macro_rules! run {
+        ($($name:ident = $opts:literal),* $(,)?) => {$(
+            eprintln!("{}", stringify!($name));
+            bench::<T, SimdQuickHeap<T, Avx2, $opts>>();
+        )*};
+    }
+    // `quickheap_aa` sets bit 32, which no code reads. It is the OPTS 0 heap under another
+    // type name, the A/A noise-floor row.
+    run!(
+        quickheap = 0,
+        quickheap_a1 = 1,
+        quickheap_a2 = 2,
+        quickheap_a3 = 4,
+        quickheap_a4 = 8,
+        quickheap_a5 = 16,
+        quickheap_a12 = 3,
+        quickheap_a123 = 7,
+        quickheap_a1234 = 15,
+        quickheap_a12345 = 31,
+        quickheap_aa = 32,
+    );
 }
 
 fn bench_plots<T: Elem + Default + std::ops::Sub<Output = T> + quickheap_dev::ElemConstraint>()
@@ -486,6 +527,21 @@ fn main() {
 
         if args.memory {
             bench_memory();
+            break 'done;
+        }
+
+        if args.variants {
+            #[cfg(not(feature = "avx2"))]
+            panic!("--variants needs the avx2 feature");
+            #[cfg(feature = "avx2")]
+            {
+                if !args.r#i64 {
+                    bench_variants::<i32>();
+                }
+                if !args.r#i32 {
+                    bench_variants::<i64>();
+                }
+            }
             break 'done;
         }
 
