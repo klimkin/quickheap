@@ -412,9 +412,6 @@ mod u32 {
     mod neon   { use super::super::*; all_tests!(u32, crate::simd::Neon, 4); }
 }
 
-/// Alternates phases of mostly decreasing pushes, which stack well over 64 pivots,
-/// with balanced random push/pop around the current minimum. Both draw from narrow
-/// ranges, so duplicates are frequent.
 fn ops_match_reference<T: GenElem, Q: TestHeap<T>>() {
     for seed in 0..8 {
         let rng = &mut fastrand::Rng::with_seed(seed);

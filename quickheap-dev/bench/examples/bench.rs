@@ -295,9 +295,8 @@ where
             bench::<T, SimdQuickHeap<T, Avx2, $opts>>();
         )*};
     }
-    // The variant registry: name = SimdQuickHeap OPTS bits. `quickheap_aa` sets bit 32,
-    // which no code reads, so it is the OPTS 0 heap under a different type name: the A/A
-    // noise-floor row.
+    // `quickheap_aa` sets bit 32, which no code reads. It is the OPTS 0 heap under another
+    // type name, the A/A noise-floor row.
     run!(
         quickheap = 0,
         quickheap_a1 = 1,

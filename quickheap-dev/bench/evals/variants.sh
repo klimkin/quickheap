@@ -12,8 +12,6 @@ out=$(cd "$out" && pwd)
 # Cargo reads the toolchain and target-cpu=native from the working directory.
 cd "$(dirname "$0")/.."
 
-# The variants need only the AVX2 backend. Default features also build the ffi
-# competitors, which need the third_party submodules.
 bin=$(cargo build --release --example bench --no-default-features --features avx2 \
     --message-format=json-render-diagnostics |
     sed -n 's/.*"executable":"\([^"]*\)".*/\1/p')

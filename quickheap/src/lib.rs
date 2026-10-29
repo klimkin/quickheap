@@ -82,11 +82,11 @@ use crate::{partitioning::VecPartitioning, pivots::MedianOfM};
 pub const OPT_TERMINAL_SHORTCUT: u32 = 1;
 /// `OPTS` bit: refill the terminal layer in a separate, never-inlined function.
 pub const OPT_COLD_TERMINAL: u32 = 2;
-/// `OPTS` bit: one popcount per partitioned vector instead of two.
+/// `OPTS` bit: one popcount per partitioned vector instead of two, on the AVX2 backend.
 pub const OPT_ONE_COUNT: u32 = 4;
 /// `OPTS` bit: stop the SIMD pivot scan at the first chunk with a pivot `<= t`.
 pub const OPT_SCAN_EARLY_EXIT: u32 = 8;
-/// `OPTS` bit: sort terminal layers of 9..=16 keys with a bitonic network.
+/// `OPTS` bit: sort terminal layers by insertion up to 8 keys and with a bitonic network for 9..=16.
 pub const OPT_SORT_NETWORK: u32 = 16;
 
 /// The key-only SimdQuickHeap implementation
@@ -149,12 +149,11 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
 
     /// Push `t` onto the priority queue.
     pub fn push(&mut self, t: T) {
-        // Pivots decrease, so t below the last pivot is below all of them.
         let target_layer =
             if OPTS & OPT_TERMINAL_SHORTCUT != 0 && self.pivots.last().is_none_or(|&p| t < p) {
                 self.pivots.len()
             } else if OPTS & OPT_SCAN_EARLY_EXIT != 0 {
-                simd::push_position_early_exit::<T, S>(&self.pivots, t)
+                unsafe { simd::push_position_early_exit::<T, S>(&self.pivots, t) }
             } else {
                 unsafe { simd::push_position::<T, S>(&self.pivots, t) }
             };
@@ -217,7 +216,6 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
         Some(min)
     }
 
-    /// The `OPT_COLD_TERMINAL` copy of the split-and-sort block in `pop`.
     #[inline(never)]
     fn refill_terminal(&mut self) {
         while self.buckets[self.pivots.len()].len() > Self::N {
@@ -290,7 +288,6 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
     }
 }
 
-/// Sort a terminal layer of at most 16 elements in decreasing order without data-dependent branches.
 #[inline(never)]
 fn sort_terminal_descending<T: Copy + Ord, S: simd::SimdElem<T>>(layer: &mut [T]) {
     const W: usize = 16;

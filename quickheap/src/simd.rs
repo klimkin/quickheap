@@ -207,15 +207,17 @@ pub fn push_position<T: Copy + Ord, S: SimdElem<T>>(pivots: &[T], t: T) -> usize
 
 /// `push_position` that stops the SIMD scan at the first chunk holding a pivot `<= t`.
 /// Pivots decrease, so every later chunk would start with such a pivot and add 0.
+///
+/// # Safety
+/// Reads up to `S::L - 1` elements past `pivots.len()`, which the caller must own.
 #[inline(always)]
-pub fn push_position_early_exit<T: Copy + Ord, S: SimdElem<T>>(pivots: &[T], t: T) -> usize {
+pub unsafe fn push_position_early_exit<T: Copy + Ord, S: SimdElem<T>>(pivots: &[T], t: T) -> usize {
     if pivots.len() <= 64 {
         let t_simd = S::splat(t);
 
         let mut target_layer = 0;
         let mut i = 0;
         while i < pivots.len() {
-            // The caller must provide initialized padding for this full SIMD load.
             let c = unsafe {
                 let vals = (pivots.as_ptr().add(i) as *const S::Simd).read_unaligned();
                 S::simd_lt_bitmask(t_simd, vals).trailing_ones() as usize
