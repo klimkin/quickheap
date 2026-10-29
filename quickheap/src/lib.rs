@@ -190,13 +190,17 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
 
         // Split the current layer as long as it is too large.
         if self.buckets[self.pivots.len()].len() > Self::N {
-            while self.buckets[self.pivots.len()].len() > Self::N {
-                self.partition();
-            }
+            if OPTS & OPT_COLD_TERMINAL != 0 {
+                self.refill_terminal();
+            } else {
+                while self.buckets[self.pivots.len()].len() > Self::N {
+                    self.partition();
+                }
 
-            // Sort final layer decreasing.
-            let layer = &mut self.buckets[self.pivots.len()];
-            layer.sort_unstable_by_key(|&x| std::cmp::Reverse(x));
+                // Sort final layer decreasing.
+                let layer = &mut self.buckets[self.pivots.len()];
+                layer.sort_unstable_by_key(|&x| std::cmp::Reverse(x));
+            }
         }
 
         // Find and extract the minimum.
@@ -219,6 +223,16 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
         self.size -= 1;
 
         Some(min)
+    }
+
+    #[inline(never)]
+    fn refill_terminal(&mut self) {
+        while self.buckets[self.pivots.len()].len() > Self::N {
+            self.partition();
+        }
+
+        let layer = &mut self.buckets[self.pivots.len()];
+        layer.sort_unstable_by_key(|&x| std::cmp::Reverse(x));
     }
 
     #[inline(never)]
