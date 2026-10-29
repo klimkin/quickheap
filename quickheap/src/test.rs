@@ -1,4 +1,7 @@
-use std::{cmp::Reverse, collections::BTreeSet};
+use std::{
+    cmp::Reverse,
+    collections::{BTreeSet, BinaryHeap},
+};
 
 use crate::simd::SimdElem;
 use crate::{KvSimdQuickHeap, SimdQuickHeap};
@@ -12,6 +15,7 @@ trait GenElem: Copy + Ord + std::fmt::Debug {
     fn gen_zero() -> Self;
     fn wrapping_inc(self) -> Self;
     fn wrapping_dec(self) -> Self;
+    fn from_u32(x: u32) -> Self;
 }
 
 #[rustfmt::skip]
@@ -22,6 +26,7 @@ impl GenElem for u64 {
     fn gen_zero() -> Self { 0 }
     fn wrapping_inc(self) -> Self { self.wrapping_add(1) }
     fn wrapping_dec(self) -> Self { self.wrapping_sub(1) }
+    fn from_u32(x: u32) -> Self { x as Self }
 }
 
 #[rustfmt::skip]
@@ -32,6 +37,7 @@ impl GenElem for i64 {
     fn gen_zero() -> Self { 0 }
     fn wrapping_inc(self) -> Self { self.wrapping_add(1) }
     fn wrapping_dec(self) -> Self { self.wrapping_sub(1) }
+    fn from_u32(x: u32) -> Self { x as Self }
 }
 
 #[rustfmt::skip]
@@ -42,6 +48,7 @@ impl GenElem for u32 {
     fn gen_zero() -> Self { 0 }
     fn wrapping_inc(self) -> Self { self.wrapping_add(1) }
     fn wrapping_dec(self) -> Self { self.wrapping_sub(1) }
+    fn from_u32(x: u32) -> Self { x as Self }
 }
 
 #[rustfmt::skip]
@@ -52,6 +59,7 @@ impl GenElem for i32 {
     fn gen_zero() -> Self { 0 }
     fn wrapping_inc(self) -> Self { self.wrapping_add(1) }
     fn wrapping_dec(self) -> Self { self.wrapping_sub(1) }
+    fn from_u32(x: u32) -> Self { x as Self }
 }
 
 trait Generator<T> {
@@ -140,7 +148,9 @@ trait TestHeap<T>: Sized {
     fn len(&self) -> usize;
 }
 
-impl<T: GenElem + Default, S: SimdElem<T>> TestHeap<T> for SimdQuickHeap<T, S> {
+impl<T: GenElem + Default, S: SimdElem<T>, const OPTS: u32> TestHeap<T>
+    for SimdQuickHeap<T, S, OPTS>
+{
     fn new() -> Self {
         Self::default()
     }
@@ -400,4 +410,69 @@ mod u32 {
 
     #[cfg(target_arch = "aarch64")]
     mod neon   { use super::super::*; all_tests!(u32, crate::simd::Neon, 4); }
+}
+
+fn ops_match_reference<T: GenElem, Q: TestHeap<T>>() {
+    for seed in 0..8 {
+        let rng = &mut fastrand::Rng::with_seed(seed);
+        let mut q = Q::new();
+        let mut reference = BinaryHeap::new();
+        let mut low = 1u32 << 29;
+        for step in 0..40_000 {
+            let descending = step / 5_000 % 2 == 0;
+            let push = if descending {
+                rng.u8(0..4) != 0
+            } else {
+                rng.bool()
+            };
+            if push {
+                let x = if descending {
+                    low -= rng.u32(0..2);
+                    low
+                } else {
+                    low - 512 + rng.u32(0..1024)
+                };
+                q.push(T::from_u32(x));
+                reference.push(Reverse(T::from_u32(x)));
+            } else {
+                assert_eq!(q.pop(), reference.pop().map(|Reverse(x)| x));
+            }
+        }
+        assert_eq!(q.len(), reference.len());
+        while let Some(Reverse(x)) = reference.pop() {
+            assert_eq!(q.pop(), Some(x));
+        }
+        assert_eq!(q.pop(), None);
+    }
+}
+
+#[rustfmt::skip]
+macro_rules! variant_tests {
+    ($($name:ident = $opts:literal),* $(,)?) => {$(
+        mod $name {
+            use super::super::*;
+            use crate::simd::Avx2;
+            #[test] fn u32() { ops_match_reference::<u32, SimdQuickHeap<u32, Avx2, $opts>>(); }
+            #[test] fn i32() { ops_match_reference::<i32, SimdQuickHeap<i32, Avx2, $opts>>(); }
+            #[test] fn u64() { ops_match_reference::<u64, SimdQuickHeap<u64, Avx2, $opts>>(); }
+            #[test] fn i64() { ops_match_reference::<i64, SimdQuickHeap<i64, Avx2, $opts>>(); }
+        }
+    )*};
+}
+
+#[cfg(target_feature = "avx2")]
+mod variants {
+    variant_tests! {
+        quickheap = 0,
+        quickheap_a1 = 1,
+        quickheap_a2 = 2,
+        quickheap_a3 = 4,
+        quickheap_a4 = 8,
+        quickheap_a5 = 16,
+        quickheap_a12 = 3,
+        quickheap_a123 = 7,
+        quickheap_a1234 = 15,
+        quickheap_a12345 = 31,
+        quickheap_aa = 32,
+    }
 }
