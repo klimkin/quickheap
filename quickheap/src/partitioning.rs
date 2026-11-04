@@ -84,6 +84,63 @@ impl<T: PartialEq + Copy, S: simd::SimdElem<T>> VecPartitioning<T, S> {
         }
     }
 
+    /// Partition `cur_layer` four ways by the decreasing `boundaries`.
+    /// Keys above `boundaries[0]` stay in `cur_layer`, and `lower[j]` gets the keys between
+    /// `boundaries[j]` and `boundaries[j + 1]`, or below `boundaries[2]` for `j == 2`.
+    /// Keys equal to a boundary can go either way.
+    pub fn partition4(
+        cur_layer: &mut Vec<T>,
+        mut lower: [&mut Vec<T>; 3],
+        boundaries: [T; 3],
+        rand: usize,
+    ) {
+        let n = cur_layer.len();
+        cur_layer.reserve(S::L);
+        let src = cur_layer.as_mut_ptr();
+        let mut writes = [src; 4];
+        for (write, layer) in writes[1..].iter_mut().zip(&mut lower) {
+            assert!(layer.is_empty(), "destination layers must be empty");
+            layer.reserve(n + S::L);
+            *write = layer.as_mut_ptr();
+        }
+
+        let thresholds = boundaries.map(S::splat);
+        let mut lens = [0; 4];
+        let n2 = n.next_multiple_of(S::L).saturating_sub(S::L);
+
+        for i in (0..n2).step_by(S::L) {
+            unsafe {
+                S::partition_multi_fast::<4>(
+                    S::simd_from_ptr(src.add(i)),
+                    &thresholds,
+                    rand,
+                    &mut writes,
+                    &mut lens,
+                );
+            }
+        }
+
+        if n2 < n {
+            unsafe {
+                S::partition_multi_slow::<4>(
+                    S::simd_from_ptr(src.add(n2)),
+                    S::splat(S::from_usize(n - n2)),
+                    &thresholds,
+                    rand,
+                    &mut writes,
+                    &mut lens,
+                );
+            }
+        }
+
+        unsafe {
+            cur_layer.set_len(lens[0]);
+            for (layer, &len) in lower.iter_mut().zip(&lens[1..]) {
+                layer.set_len(len);
+            }
+        }
+    }
+
     #[inline]
     /// Partition matching key/value layers.
     ///

@@ -94,6 +94,8 @@ pub const OPT_PIVOT_SAMPLE: u32 = 64;
 pub const OPT_TERMINAL_32: u32 = 128;
 /// `OPTS` bit: every 2048 pops, merge adjacent layer pairs holding fewer than twice the keys below them.
 pub const OPT_REBALANCE: u32 = 256;
+/// `OPTS` bit: split layers above 128 keys four ways around the 1st, 2nd, and 4th of 7 sorted samples.
+pub const OPT_MULTIWAY: u32 = 512;
 
 /// The key-only SimdQuickHeap implementation
 ///
@@ -279,6 +281,13 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
 
     #[inline(never)]
     fn partition(&mut self) {
+        if OPTS & OPT_MULTIWAY != 0
+            && self.buckets[self.pivots.len()].len() > 128
+            && self.try_partition4()
+        {
+            return;
+        }
+
         let total_layers = self.pivots.len() + 1;
 
         // Reserve space for an additional L layers when needed.
@@ -333,6 +342,48 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
 
             self.pivots.pop();
         }
+    }
+
+    fn try_partition4(&mut self) -> bool {
+        let p = self.pivots.len();
+        self.pivots.reserve(3 + S::L);
+        if self.buckets.len() < p + 4 {
+            self.buckets.resize_with(p + 4, Vec::new);
+        }
+
+        let [cur, l1, l2, l3] = &mut self.buckets[p..p + 4] else {
+            unreachable!()
+        };
+        let mut samples: [(T, usize); 7] = std::array::from_fn(|_| {
+            let pos = rand::random_range(0..cur.len());
+            (cur[pos], pos)
+        });
+        samples.sort_unstable();
+        let boundaries = [samples[3].0, samples[1].0, samples[0].0];
+        l1.clear();
+        l2.clear();
+        l3.clear();
+        VecPartitioning::<T, S>::partition4(cur, [l1, l2, l3], boundaries, samples[3].1);
+
+        let layers = &mut self.buckets[p..p + 4];
+        if layers.iter().filter(|b| !b.is_empty()).count() < 2 {
+            let full = layers.iter().position(|b| !b.is_empty()).unwrap();
+            layers.swap(0, full);
+            return false;
+        }
+
+        let mut first = true;
+        for i in 0..4 {
+            if self.buckets[p + i].is_empty() {
+                continue;
+            }
+            if !first {
+                self.pivots.push(boundaries[i - 1]);
+            }
+            first = false;
+            self.buckets.swap(self.pivots.len(), p + i);
+        }
+        true
     }
 }
 

@@ -483,10 +483,12 @@ mod variants {
         quickheap_a6 = 64,
         quickheap_a7 = 128,
         quickheap_a8 = 256,
+        quickheap_a9 = 512,
         quickheap_a12 = 3,
         quickheap_a123 = 7,
         quickheap_a1234 = 15,
         quickheap_a12345 = 31,
+        quickheap_a123456789 = 991,
         quickheap_aa = 32,
     }
 }
