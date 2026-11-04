@@ -88,6 +88,8 @@ pub const OPT_ONE_COUNT: u32 = 4;
 pub const OPT_SCAN_EARLY_EXIT: u32 = 8;
 /// `OPTS` bit: sort terminal layers by insertion up to 8 keys and with a bitonic network for 9..=16.
 pub const OPT_SORT_NETWORK: u32 = 16;
+/// `OPTS` bit: pick the pivot as the median of 3, 7, or 15 samples for layers below 1024, below 16384, or larger.
+pub const OPT_PIVOT_SAMPLE: u32 = 64;
 
 /// The key-only SimdQuickHeap implementation
 ///
@@ -257,7 +259,13 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
         let n = cur_layer.len();
 
         // Sample a pivot using the pivot strategy
-        let (pivot, pivot_pos) = MedianOfM::<3>::pick(cur_layer);
+        let (pivot, pivot_pos) = if OPTS & OPT_PIVOT_SAMPLE == 0 || n < 1024 {
+            MedianOfM::<3>::pick(cur_layer)
+        } else if n < 16384 {
+            MedianOfM::<7>::pick(cur_layer)
+        } else {
+            MedianOfM::<15>::pick(cur_layer)
+        };
 
         self.pivots.push(pivot);
 
