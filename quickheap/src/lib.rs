@@ -90,6 +90,8 @@ pub const OPT_SCAN_EARLY_EXIT: u32 = 8;
 pub const OPT_SORT_NETWORK: u32 = 16;
 /// `OPTS` bit: pick the pivot as the median of 3, 7, or 15 samples for layers below 1024, below 16384, or larger.
 pub const OPT_PIVOT_SAMPLE: u32 = 64;
+/// `OPTS` bit: keep up to 32 keys in the sorted terminal layer instead of 16.
+pub const OPT_TERMINAL_32: u32 = 128;
 
 /// The key-only SimdQuickHeap implementation
 ///
@@ -132,7 +134,7 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> Default
 }
 
 impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHeap<T, S, OPTS> {
-    const N: usize = 16;
+    const N: usize = if OPTS & OPT_TERMINAL_32 != 0 { 32 } else { 16 };
 
     /// Return the total capacity over all buckets.
     pub fn capacity(&self) -> usize {
@@ -230,7 +232,7 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
 
     #[inline(always)]
     fn sort_terminal(layer: &mut [T]) {
-        if OPTS & OPT_SORT_NETWORK != 0 {
+        if OPTS & OPT_SORT_NETWORK != 0 && layer.len() <= 16 {
             sort_terminal_descending::<T, S>(layer);
         } else {
             layer.sort_unstable_by_key(|&x| std::cmp::Reverse(x));

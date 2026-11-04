@@ -470,6 +470,7 @@ mod variants {
         quickheap_a4 = 8,
         quickheap_a5 = 16,
         quickheap_a6 = 64,
+        quickheap_a7 = 128,
         quickheap_a12 = 3,
         quickheap_a123 = 7,
         quickheap_a1234 = 15,
