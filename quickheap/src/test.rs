@@ -417,6 +417,17 @@ fn ops_match_reference<T: GenElem, Q: TestHeap<T>>() {
         let rng = &mut fastrand::Rng::with_seed(seed);
         let mut q = Q::new();
         let mut reference = BinaryHeap::new();
+        let range = [1 << 20, 64, 1][seed as usize % 3];
+        for round in [20_000, 5_000] {
+            for _ in 0..round {
+                let x = T::from_u32(rng.u32(0..range));
+                q.push(x);
+                reference.push(Reverse(x));
+            }
+            for _ in 0..15_000.min(reference.len()) {
+                assert_eq!(q.pop(), reference.pop().map(|Reverse(x)| x));
+            }
+        }
         let mut low = 1u32 << 29;
         for step in 0..40_000 {
             let descending = step / 5_000 % 2 == 0;
