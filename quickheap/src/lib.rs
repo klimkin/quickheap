@@ -92,6 +92,8 @@ pub const OPT_SORT_NETWORK: u32 = 16;
 pub const OPT_PIVOT_SAMPLE: u32 = 64;
 /// `OPTS` bit: keep up to 32 keys in the sorted terminal layer instead of 16.
 pub const OPT_TERMINAL_32: u32 = 128;
+/// `OPTS` bit: every 2048 pops, merge adjacent layer pairs holding fewer than twice the keys below them.
+pub const OPT_REBALANCE: u32 = 256;
 
 /// The key-only SimdQuickHeap implementation
 ///
@@ -116,6 +118,7 @@ pub struct SimdQuickHeap<T: Copy + Ord, S: simd::SimdElem<T> = Simd, const OPTS:
     /// This can be longer than `layer` to reuse allocations.
     buckets: Vec<Vec<T>>,
     size: usize,
+    pops: usize,
     _backend: PhantomData<S>,
 }
 
@@ -128,6 +131,7 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> Default
             pivots: Vec::with_capacity(128),
             buckets: (0..128).map(|_| vec![]).collect(),
             size: 0,
+            pops: 0,
             _backend: PhantomData,
         }
     }
@@ -217,7 +221,41 @@ impl<T: Copy + Ord + Default, S: simd::SimdElem<T>, const OPTS: u32> SimdQuickHe
 
         self.size -= 1;
 
+        if OPTS & OPT_REBALANCE != 0 {
+            self.pops += 1;
+            if self.pops == 2048 {
+                self.pops = 0;
+                self.rebalance();
+            }
+        }
+
         Some(min)
+    }
+
+    #[inline(never)]
+    fn rebalance(&mut self) {
+        let mut total = 0;
+        let mut layer = self.pivots.len();
+        while layer != 0 {
+            if self.buckets[layer].len() + self.buckets[layer - 1].len() < 2 * total {
+                self.merge_layers(layer - 1);
+            } else {
+                total += self.buckets[layer].len();
+            }
+            layer -= 1;
+        }
+    }
+
+    fn merge_layers(&mut self, upper: usize) {
+        let [hi, lo] = &mut self.buckets[upper..=upper + 1] else {
+            unreachable!()
+        };
+        if hi.len() < lo.len() {
+            std::mem::swap(hi, lo);
+        }
+        hi.append(lo);
+        self.buckets[upper + 1..].rotate_left(1);
+        self.pivots.remove(upper);
     }
 
     #[inline(never)]
