@@ -282,6 +282,10 @@ struct Args {
     /// SimdQuickHeap<_, Avx2, OPTS> for every OPTS in the variant registry.
     #[clap(long)]
     variants: bool,
+
+    /// With --variants, run these OPTS values from the design registry in this order.
+    #[clap(long, value_delimiter = ',')]
+    opts: Vec<u32>,
 }
 
 #[cfg(feature = "avx2")]
@@ -289,6 +293,13 @@ fn bench_variants<T: Elem + Default>()
 where
     Avx2: SimdElem<T>,
 {
+    if !ARGS.opts.is_empty() {
+        for &opts in &ARGS.opts {
+            eprintln!("opts {opts}");
+            bench_design::<T>(opts);
+        }
+        return;
+    }
     macro_rules! run {
         ($($name:ident = $opts:literal),* $(,)?) => {$(
             eprintln!("{}", stringify!($name));
@@ -313,6 +324,27 @@ where
         quickheap_a1234 = 15,
         quickheap_a12345 = 31,
         quickheap_aa = 32,
+    );
+}
+
+#[cfg(feature = "avx2")]
+fn bench_design<T: Elem + Default>(opts: u32)
+where
+    Avx2: SimdElem<T>,
+{
+    macro_rules! design {
+        ($($opts:literal),* $(,)?) => {
+            match opts {
+                $($opts => bench::<T, SimdQuickHeap<T, Avx2, $opts>>(),)*
+                _ => panic!("OPTS {opts} is not in the design registry"),
+            }
+        };
+    }
+    design!(
+        0, 944, 872, 216, 740, 340, 396, 572, 482, 594, 650, 314, 774, 182, 110, 990, 961, 113,
+        169, 793, 293, 661, 589, 509, 547, 403, 331, 763, 199, 887, 943, 31, 192, 144, 80, 136, 72,
+        24, 130, 66, 18, 210, 10, 202, 154, 90, 129, 65, 17, 209, 9, 201, 153, 89, 3, 195, 147, 83,
+        139, 75, 27, 219, 203, 207, 217, 221
     );
 }
 
